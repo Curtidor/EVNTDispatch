@@ -14,20 +14,21 @@ PyTrigger is a Python-based event-driven system that simplifies event management
 ```python
 from pytrigger import EventDispatcher, Event, EventType, Priority
 
-# Initialize the Event Dispatcher
+# Create an instance of the EventDispatcher
 dispatcher = EventDispatcher()
 
-# Define an event
+# Define an event called "example_event" of type USER_ACTION
 my_event = Event(event_name="example_event", event_type=EventType.USER_ACTION)
 
-# Define a listener function
+# Define a listener function to handle the event
 def on_event_triggered(event):
+    # Print a message when the event is triggered
     print(f"Event '{event.event_name}' was triggered!")
 
-# Register the listener
+# Register the listener function for the "example_event" event with normal priority
 dispatcher.add_listener("example_event", on_event_triggered, priority=Priority.NORMAL)
 
-# Trigger the event
+# Trigger the "example_event" by dispatching the event through the EventDispatcher
 dispatcher.trigger(my_event)
 ```
 

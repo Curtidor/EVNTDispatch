@@ -4,6 +4,7 @@ import unittest
 from event_system.event_dispatcher import EventDispatcher
 from event_system.event import Event
 from event_system.event_listener import Priority
+from event_system.event_type import EventType
 
 
 class TestAsyncEvent(unittest.IsolatedAsyncioTestCase):
@@ -37,8 +38,8 @@ class TestAsyncEvent(unittest.IsolatedAsyncioTestCase):
 
         # Trigger the event twice asynchronously using async_trigger
         await asyncio.gather(
-            event_dispatcher.async_trigger(Event("test", "test_type")),
-            event_dispatcher.async_trigger(Event("test", "test_type"))
+            event_dispatcher.async_trigger(Event("test", EventType.Base)),
+            event_dispatcher.async_trigger(Event("test", EventType.Base))
         )
 
         await event_dispatcher.close()
@@ -80,7 +81,7 @@ class TestAsyncEvent(unittest.IsolatedAsyncioTestCase):
         event_dispatcher.add_listener("test", listener_two, priority=Priority.NORMAL)
 
         # Trigger the event asynchronously with max_responders=1
-        await event_dispatcher.async_trigger(Event("test", "test_type", max_responders=1))
+        await event_dispatcher.async_trigger(Event("test", EventType.Base, max_responders=1))
         await event_dispatcher.close()
 
         # Assert that only the highest priority listener (listener_one) has been called

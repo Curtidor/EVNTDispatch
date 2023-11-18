@@ -2,5 +2,5 @@ from enum import Enum
 
 
 class EventType(Enum):
-    """Base class for event types"""
-    pass
+    Base = 0
+    # ... add more event types as needed

@@ -1,6 +1,7 @@
 import unittest
 
 from event_system.event_dispatcher import EventDispatcher, Event
+from event_system.event_type import EventType
 
 
 class TestEvents(unittest.IsolatedAsyncioTestCase):
@@ -14,7 +15,7 @@ class TestEvents(unittest.IsolatedAsyncioTestCase):
             listener_one_responses.append("success")
 
         event_dispatcher.add_listener("test", listener_one)
-        event_dispatcher.trigger(Event("test", "Test_Type"))
+        event_dispatcher.trigger(Event("test", EventType.Base))
 
         await event_dispatcher.close()
 

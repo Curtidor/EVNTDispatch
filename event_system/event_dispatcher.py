@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from asyncio import AbstractEventLoop
 
 from typing import Callable, Any, Set, List, Dict
 
@@ -13,9 +14,7 @@ class EventDispatcher:
     """
     UNLIMITED_RESPONDERS = -1
 
-    _busy_listeners: Set['Callable'] = set()
-
-    def __init__(self, debug_mode: bool = False):
+    def __init__(self, loop: asyncio.AbstractEventLoop = None, debug_mode: bool = False):
         """
         Initialize the EventDispatcher.
 
@@ -23,11 +22,13 @@ class EventDispatcher:
         """
         self.debug_mode = debug_mode
         self._listeners: Dict[str, List['EventListener']] = {}
+        self._busy_listeners: Set['Callable'] = set()
         self._cancel_events = False
 
-        self._event_loop = asyncio.get_event_loop()
+        self._event_loop = self._set_event_loop(loop)
         self._event_queue = asyncio.Queue()
         self._is_event_loop_running = False
+        self._queue_empty_event = asyncio.Event()
 
     def start(self):
         """
@@ -41,10 +42,8 @@ class EventDispatcher:
         """
         Close the event loop and wait for queued events to be processed and ran.
         """
-
         # wait for all events in the queue to be processed
-        while self._event_queue.qsize():
-            await asyncio.sleep(0.15)
+        await self._queue_empty_event.wait()
 
         tasks = []
         for task in asyncio.all_tasks(loop=self._event_loop):
@@ -246,8 +245,7 @@ class EventDispatcher:
         if callback in self._busy_listeners:
             self._busy_listeners.remove(callback)
 
-    @classmethod
-    def _log_listener_call(cls, listener: EventListener, event: Event, is_async: bool) -> None:
+    def _log_listener_call(self, listener: EventListener, event: Event, is_async: bool) -> None:
         """
         Log the invocation of an event listener, including whether it's synchronous or asynchronous.
 
@@ -259,8 +257,23 @@ class EventDispatcher:
 
         logging.info(f"{message_front}: [{listener.callback.__name__}] from event: [{event.event_name}]")
 
-        if is_async and listener.callback in cls._busy_listeners:
+        if is_async and listener.callback in self._busy_listeners:
             logging.info(f"skipping call to: [{listener.callback.__name__}] as it's busy")
+
+    def _set_event_loop(self, loop: asyncio.AbstractEventLoop) -> AbstractEventLoop:
+        """
+        Set the event loop, creating a new one if needed.
+        """
+        if not loop:
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+        else:
+            self._loop = loop
+
+        return self._loop
 
     async def _event_loop_runner(self):
         """
@@ -273,4 +286,12 @@ class EventDispatcher:
                 self._event_loop.create_task(func(event, *args, **kwargs))
             else:
                 func(event, *args, **kwargs)
+
+            # if the queue is empty set the empty event (true)
+            if self._event_queue.empty():
+                self._queue_empty_event.set()
+            # else clear the event (false)
+            else:
+                self._queue_empty_event.clear()
+
             self._event_queue.task_done()

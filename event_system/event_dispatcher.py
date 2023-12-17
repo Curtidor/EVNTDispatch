@@ -1,8 +1,8 @@
 import asyncio
 import logging
-from asyncio import AbstractEventLoop
 
-from typing import Callable, Any, Set, List, Dict
+from asyncio import AbstractEventLoop
+from typing import Callable, Any, Set, List, Dict, Union, Coroutine
 
 from .event_listener import EventListener, Priority
 from .event import Event
@@ -21,14 +21,17 @@ class EventDispatcher:
         :param debug_mode: Enable debug mode for logging.
         """
         self.debug_mode = debug_mode
+
         self._listeners: Dict[str, List['EventListener']] = {}
         self._busy_listeners: Set['Callable'] = set()
         self._cancel_events = False
 
         self._event_loop = self._set_event_loop(loop)
         self._event_queue = asyncio.Queue()
-        self._is_event_loop_running = False
+
         self._queue_empty_event = asyncio.Event()
+        self._time_until_final_task = 0
+        self._is_event_loop_running = None
 
     def start(self):
         """
@@ -44,6 +47,9 @@ class EventDispatcher:
         """
         # wait for all events in the queue to be processed
         await self._queue_empty_event.wait()
+
+        while self._loop.time() < self._time_until_final_task:
+            await asyncio.sleep(0.01)
 
         tasks = []
         for task in asyncio.all_tasks(loop=self._event_loop):
@@ -78,6 +84,13 @@ class EventDispatcher:
             if event_listener.callback == listener:
                 self._listeners.get(event_name).remove(event_listener)
                 return  # To ensure only one instance is removed
+
+    def schedule_task(self, task: Callable, exc_time: float, *args) -> None:
+        if not self._is_event_loop_running:
+            raise Exception("No event loop running")
+
+        time_handler = self._loop.call_later(exc_time, task, *args)
+        self._time_until_final_task = time_handler.when()
 
     def trigger(self, event: Event, *args, **kwargs) -> None:
         """

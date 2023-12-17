@@ -1,4 +1,5 @@
 import asyncio
+import time
 import unittest
 
 from event_system.event_dispatcher import EventDispatcher
@@ -88,6 +89,12 @@ class TestAsyncEvent(unittest.IsolatedAsyncioTestCase):
         # and the second listener (listener_two) has not been executed due to max_responders=1
         self.assertEqual(listener_one_results, ["success"])
         self.assertEqual(listener_two_results, [])
+
+    async def register_with_same_name_as_busy(self):
+        pass
+
+    async def test_schedule_task(self):
+        pass
 
 
 if __name__ == "__main__":

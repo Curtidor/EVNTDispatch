@@ -58,7 +58,6 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         await event_dispatcher.close()
 
-
     async def test_wait_for_event(self) -> None:
         """
         Test waiting for events with EventDispatcher.

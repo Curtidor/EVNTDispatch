@@ -1,8 +1,8 @@
 import asyncio
 import logging
 
-from asyncio import AbstractEventLoop, Future
-from typing import Callable, Any, Set, List, Dict, Union, Coroutine
+from asyncio import AbstractEventLoop
+from typing import Callable, Any, Set, List, Dict
 
 from .event_listener import EventListener, Priority
 from .event import Event
@@ -42,15 +42,19 @@ class EventDispatcher:
             self._event_loop.create_task(self._event_loop_runner())
             self._is_event_loop_running = True
 
-    async def close(self):
+    async def close(self, wait_for_scheduled_tasks: bool = True):
         """
-        Close the event loop and wait for queued events to be processed and ran.
+        Close the event loop and wait for queued and scheduled events to be processed and ran.
         """
         # wait for all events in the queue to be processed
         await self._queue_empty_event.wait()
 
-        while self._loop.time() < self._time_until_final_task:
-            await asyncio.sleep(0.01)
+        if wait_for_scheduled_tasks:
+            # get the time left until the final task is complete
+            final_task_complete_time = self._time_until_final_task - self._loop.time()
+            # ensure the value is positive or zero(z)
+            z_final_task_complete_time = final_task_complete_time if final_task_complete_time > 0 else 0
+            await asyncio.sleep(z_final_task_complete_time)
 
         tasks = []
         for task in asyncio.all_tasks(loop=self._event_loop):
@@ -86,11 +90,12 @@ class EventDispatcher:
                 self._listeners.get(event_name).remove(event_listener)
                 return  # To ensure only one instance is removed
 
-    def schedule_task(self, task: Callable, exc_time: float, *args) -> None:
+    def schedule_task(self, func: Callable, exc_time: float, *args) -> None:
         if not self._is_event_loop_running:
             raise Exception("No event loop running")
 
-        time_handler = self._loop.call_later(exc_time, task, *args)
+        time_handler = self._loop.call_later(exc_time, func, *args)
+
         self._time_until_final_task = time_handler.when()
 
     def task_complete(self) -> None:

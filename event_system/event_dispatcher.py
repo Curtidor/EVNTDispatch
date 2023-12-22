@@ -1,11 +1,12 @@
 import asyncio
 import logging
 
-from asyncio import AbstractEventLoop
+from asyncio import AbstractEventLoop, Future
 from typing import Callable, Any, Set, List, Dict, Union, Coroutine
 
 from .event_listener import EventListener, Priority
 from .event import Event
+from .event_type import EventType
 
 
 class EventDispatcher:
@@ -91,6 +92,9 @@ class EventDispatcher:
 
         time_handler = self._loop.call_later(exc_time, task, *args)
         self._time_until_final_task = time_handler.when()
+
+    def task_complete(self) -> None:
+        self.trigger(Event("Event Complete", EventType.Base))
 
     def trigger(self, event: Event, *args, **kwargs) -> None:
         """
@@ -293,12 +297,15 @@ class EventDispatcher:
         Run the event loop to process queued events.
         """
         while self._is_event_loop_running:
-            task = await self._event_queue.get()
-            func, event, args, kwargs = task
-            if asyncio.iscoroutinefunction(func):
-                self._event_loop.create_task(func(event, *args, **kwargs))
+            data = await self._event_queue.get()
+            event_executor, event, args, kwargs = data
+            if asyncio.iscoroutinefunction(event_executor):
+                task = self._event_loop.create_task(event_executor(event, *args, **kwargs))
+                if event.on_finish: task.add_done_callback(event.on_finish)
             else:
-                func(event, *args, **kwargs)
+                # For synchronous functions, use asyncio.to_thread to run them in a separate thread
+                await asyncio.to_thread(event_executor, event, *args, **kwargs)
+                if event.on_finish: event.on_finish()
 
             # if the queue is empty set the empty event (true)
             if self._event_queue.empty():

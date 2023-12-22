@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Coroutine, Union
 from enum import Enum
 
 
@@ -9,7 +9,7 @@ class Priority(Enum):
 
 
 class EventListener:
-    def __init__(self, callback: Callable, priority: Priority = Priority.NORMAL):
+    def __init__(self, callback: Union[Callable, Coroutine], priority: Priority = Priority.NORMAL):
         self.callback = callback
         self.priority = priority
 

@@ -9,7 +9,8 @@ class Event:
     event_name: str
     event_type: EventType
     data: Any = None
-    source: Callable = None
+    source: Union[Callable, Coroutine] = None
     on_finish: Union[Callable, Coroutine] = None
     max_responders: int = -1
-    allow_busy_trigger: bool = False
+    include_busy_listeners: bool = False
+    is_canceled: bool = False

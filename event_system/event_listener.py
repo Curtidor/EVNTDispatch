@@ -9,9 +9,10 @@ class Priority(Enum):
 
 
 class EventListener:
-    def __init__(self, callback: Union[Callable, Coroutine], priority: Priority = Priority.NORMAL):
+    def __init__(self, callback: Union[Callable, Coroutine], priority: Priority = Priority.NORMAL, allow_busy_trigger: bool = True):
         self.callback = callback
         self.priority = priority
+        self.allow_busy_trigger = allow_busy_trigger
 
     def __eq__(self, other: 'EventListener') -> bool:
         if not isinstance(other, EventListener):

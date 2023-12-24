@@ -357,15 +357,6 @@ class EventDispatcher:
         self._listeners[event_name] = sorted(self._listeners[event_name],
                                              key=lambda event_listener: event_listener.priority.value)
 
-    def _remove_busy_listener(self, callback: Callable) -> None:
-        """
-        Remove a busy listener from the set of busy listeners.
-
-        :param callback: Callable object representing the listener function.
-        """
-        if callback in self._busy_listeners:
-            self._busy_listeners.remove(callback)
-
     def _log_listener_call(self, listener: EventListener, event: Event, is_async: bool) -> None:
         """
         Log the invocation of an event listener, including whether it's synchronous or asynchronous.

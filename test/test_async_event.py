@@ -150,6 +150,25 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual('1', collected_data[0])
 
+    async def test_cancel_running_async_event(self):
+        event_dispatcher = EventDispatcher()
+        event_dispatcher.start()
+
+        collected_values = []
+
+        async def listener_one(event):
+            await asyncio.sleep(1.3)
+            collected_values.append('1')
+
+        event_dispatcher.add_listener('test', listener_one)
+        await event_dispatcher.async_trigger(Event('test', EventType.Base))
+
+        await asyncio.sleep(1)
+        event_dispatcher.cancel_async_event('test')
+        await event_dispatcher.close()
+
+        self.assertEqual(0, len(collected_values))
+
 
 if __name__ == "__main__":
     unittest.main()

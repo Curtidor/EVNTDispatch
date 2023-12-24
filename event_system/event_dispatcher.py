@@ -8,23 +8,6 @@ from typing import Callable, Any, Set, List, Dict, Union, Coroutine, Tuple
 from .event_listener import EventListener, Priority
 from .event import Event
 
-# create logger
-logger = logging.getLogger('simple_example')
-logger.setLevel(logging.DEBUG)
-
-# create console handler and set level to debug
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-
-# create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-# add formatter to ch
-ch.setFormatter(formatter)
-
-# add ch to logger
-logger.addHandler(ch)
-
 
 class EventDispatcher:
     """
@@ -41,20 +24,24 @@ class EventDispatcher:
         self.debug_mode = debug_mode
 
         self._listeners: Dict[str, List['EventListener']] = {}
-        self._busy_listeners: Set[Coroutine] = set()
         self._sync_canceled_future_events: Dict[str, int] = {}
         self._running_async_tasks: Dict[str, List[Task]] = {}
-        self._cancel_events = False
+        self._busy_listeners: Set[Coroutine] = set()
 
+        # event loop
+        self._event_queue_manager_task: Task = None # noqa
         self._event_loop = self._set_event_loop(loop)
         self._event_queue = asyncio.Queue()
-        self._event_queue_manager_task: Task = None # noqa
-        # has the queue had an item put into it yet?
-        self._is_queue_primed = False
-
         self._queue_empty_event = asyncio.Event()
+
+        # tasks
+        self._running_async_tasks: Dict[str, List[Task]] = {}
         self._time_until_final_task = 0
-        self._is_event_loop_running = None
+
+        # flags
+        self._cancel_events = False
+        self._is_queue_primed = False
+        self._is_event_loop_running = False
 
     def start(self):
         """
@@ -86,6 +73,8 @@ class EventDispatcher:
         tasks = []
         for k, v in self._running_async_tasks.items():
             for task in v:
+                if task.cancelled():
+                    continue
                 tasks.append(task)
 
         for task in asyncio.all_tasks(loop=self._event_loop):
@@ -137,7 +126,7 @@ class EventDispatcher:
             self._sync_canceled_future_events[event_name] = 1
 
     def cancel_async_event(self, event_name: str) -> None:
-        for task in self._running_async_tasks.get(event_name):
+        for task in self._running_async_tasks.get(event_name, []):
             try:
                 task.cancel()
             except asyncio.CancelledError:

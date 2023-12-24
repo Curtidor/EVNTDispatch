@@ -3,10 +3,11 @@ import functools
 import logging
 
 from asyncio import AbstractEventLoop, Task, Future
-from typing import Callable, Any, Set, List, Dict, Union, Coroutine, Tuple
+from typing import Callable, Any, Set, List, Dict, Union, Coroutine, Tuple, Generator
 
 from .event_listener import EventListener, Priority
 from .event import Event
+from .event_type import EventType
 
 
 class EventDispatcher:
@@ -25,7 +26,6 @@ class EventDispatcher:
 
         self._listeners: Dict[str, List['EventListener']] = {}
         self._sync_canceled_future_events: Dict[str, int] = {}
-        self._running_async_tasks: Dict[str, List[Task]] = {}
         self._busy_listeners: Set[Coroutine] = set()
 
         # event loop
@@ -172,6 +172,7 @@ class EventDispatcher:
         """
         if not self._is_event_loop_running:
             raise Exception("No event loop running")
+
         self._is_queue_primed = True
         self._event_queue.put_nowait((self._sync_trigger, event, args, kwargs))
 
@@ -187,7 +188,7 @@ class EventDispatcher:
             return
 
         responses = 0
-        for listener in self._listeners.get(event.event_name, []):
+        for listener in self._get_listeners(event):
             if event.max_responders != EventDispatcher.UNLIMITED_RESPONDERS and responses >= event.max_responders:
                 return
 
@@ -253,10 +254,9 @@ class EventDispatcher:
         if self._cancel_events or self._event_cancellation_handler(event):
             return
 
-        listeners = self._listeners.get(event.event_name, [])
         self._is_queue_primed = True
 
-        for listener in listeners:
+        for listener in self._get_listeners(event):
             if asyncio.iscoroutinefunction(listener.callback):
                 await self._run_async_listener(listener, event, *args, **kwargs)
             else:
@@ -283,7 +283,7 @@ class EventDispatcher:
             listeners)
 
         callable_listeners = []
-        for event_listener in listeners:
+        for event_listener in self._get_listeners(event):
             if event_listener.allow_busy_trigger or event_listener.callback not in self._busy_listeners or event.include_busy_listeners:
                 callable_listeners.append(event_listener)
 
@@ -370,10 +370,20 @@ class EventDispatcher:
         """
         return self._event_queue.qsize()
 
-    def get_busy_listeners(self) -> Set[Coroutine]:
-        return self._busy_listeners
+    @staticmethod
+    def _does_event_type_match(listener: EventListener, event: Event) -> bool:
+        if listener.event_type == EventType.Base or listener.event_type == event.event_type:
+            return True
 
-    def _register_event_listener(self, event_name: str, callback: Callable, priority: Priority, allow_busy_trigger: bool = True) -> None:
+        return False
+
+    def _get_listeners(self, event: Event) -> Generator[EventListener, None, None]:
+        for listener in self._listeners.get(event.event_name, []):
+            if not self._does_event_type_match(listener, event):
+                continue
+            yield listener
+
+    def _register_event_listener(self, event_name: str, callback: Callable, priority: Priority, allow_busy_trigger: bool = True, event_type: EventType = EventType.Base) -> None:
         """
         Register an event listener for the specified event.
 
@@ -382,7 +392,7 @@ class EventDispatcher:
         :param callback: Callable object representing the listener function.
         :param priority: Priority of the listener.
         """
-        listener = EventListener(callback=callback, priority=priority, allow_busy_trigger=allow_busy_trigger)
+        listener = EventListener(callback=callback, priority=priority, allow_busy_trigger=allow_busy_trigger, event_type=event_type)
 
         # if the callback is already registered in the event, return
         if listener.callback in [lstener for lstener in self._listeners.get(event_name, [])]:
@@ -412,9 +422,9 @@ class EventDispatcher:
         :param event: The event associated with the listener.
         :param is_async: True if the listener is asynchronous; False if synchronous.
         """
-        message_front = "async calling" if is_async else "calling"
+        message_front = "calling async" if is_async else "calling sync"
 
-        logging.info(f"{message_front}: [{listener.callback.__name__}] from event: [{event.event_name}]")
+        logging.info(f"{message_front} listener: [{listener.callback.__name__}] from event: [{event.event_name}]")
 
         if is_async and listener.callback in self._busy_listeners:
             logging.info(f"skipping call to: [{listener.callback.__name__}] as it's busy")
@@ -459,7 +469,7 @@ class EventDispatcher:
                 task = self._event_loop.create_task(event_executor(event, *args, **kwargs))
                 if callable(event.on_finish): task.add_done_callback(event.on_finish)
             else:
-                # For synchronous functions, use asyncio.to_thread to run them in a separate thread
+                # for synchronous functions, use asyncio.to_thread to run them in a separate thread
                 await asyncio.to_thread(event_executor, event, *args, **kwargs)
                 if callable(event.on_finish): event.on_finish()
 

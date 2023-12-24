@@ -112,6 +112,17 @@ class EventDispatcher:
                 return  # To ensure only one instance is removed
 
     def schedule_task(self, func: Callable, exc_time: float, *args) -> None:
+        """
+        Schedule a task to be executed after a specified delay.
+
+        This method schedules a callable function (`func`) to be executed after a specified time (`exc_time`) on the
+        event loop. The `func` will be called with the provided arguments (`*args`) when the scheduled time is reached.
+
+        :param func: The function or callable to be executed.
+        :param exc_time: The time in seconds after which the function will be called.
+        :param args: Additional arguments to pass to the function.
+        :raises Exception: If there is no event loop running when attempting to schedule the task.
+        """
         if not self._is_event_loop_running:
             raise Exception("No event loop running")
 
@@ -120,12 +131,31 @@ class EventDispatcher:
         self._time_until_final_task = time_handler.when()
 
     def cancel_future_sync_event(self, event_name: str) -> None:
+        """
+        Cancel future occurrences of a synchronous event.
+
+        This method increments the cancellation count for a specific synchronous event (`event_name`). It keeps track of
+        the number of times the event has been canceled to prevent its future execution based on the cancellation count.
+
+        If the event has already been canceled at least once, this method increments the cancellation count. Otherwise,
+        it initializes the count to 1.
+
+        :param event_name: The name or identifier of the synchronous event to cancel.
+        """
         if self._sync_canceled_future_events.get(event_name):
             self._sync_canceled_future_events[event_name] += 1
         else:
             self._sync_canceled_future_events[event_name] = 1
 
     def cancel_async_event(self, event_name: str) -> None:
+        """
+        Cancel all running asynchronous tasks associated with a specific event.
+
+        This method cancels all running asynchronous tasks that are associated with a given event (`event_name`). It
+        retrieves the tasks related to the specified event and attempts to cancel each task.
+
+        :param event_name: The name or identifier of the event for which running asynchronous tasks should be canceled.
+        """
         for task in self._running_async_tasks.get(event_name, []):
             try:
                 task.cancel()
@@ -165,6 +195,19 @@ class EventDispatcher:
             responses += 1
 
     def _run_sync_listener(self, listener: EventListener, event: Event, *args, **kwargs):
+        """
+        Execute a synchronous event listener.
+
+        This method executes a synchronous event listener represented by the provided `listener` object, passing the
+        associated event (`event`) along with additional arguments and keyword arguments.
+
+        If debug mode is enabled (`self.debug_mode`), it logs the invocation of the listener.
+
+        :param listener: The EventListener representing the synchronous event listener function to execute.
+        :param event: The event associated with the listener.
+        :param args: Additional arguments to pass to the listener.
+        :param kwargs: Additional keyword arguments to pass to the listener.
+        """
         if self.debug_mode:
             self._log_listener_call(listener, event, False)
 
@@ -274,7 +317,22 @@ class EventDispatcher:
         callback = functools.partial(self._clean_up_async_task, event, listener, task)
         task.add_done_callback(callback)
 
-    def _clean_up_async_task(self, event: Event, listener: EventListener,  task: Task, future: Future):
+    def _clean_up_async_task(self, event: Event, listener: EventListener, task: Task, future: Future):
+        """
+        Clean up after the completion of an asynchronous task associated with an event.
+
+        This method performs cleanup actions after the completion of an asynchronous task (`task`) that was associated
+        with a specific event (`event`) and executed by a particular event listener (`listener`).
+
+        It removes the listener from the set of busy listeners (`_busy_listeners`), updates the list of running asynchronous
+        tasks (`_running_async_tasks`) for the event by removing the completed task, and checks if there are no more tasks
+        associated with the event to remove the event from the running task's dictionary.
+
+        :param event: The event associated with the completed task.
+        :param listener: The EventListener whose task has been completed.
+        :param task: The completed asyncio Task object.
+        :param future: The Future associated with the completed task.
+        """
         if listener.callback in self._busy_listeners:
             self._busy_listeners.remove(listener.callback)
 

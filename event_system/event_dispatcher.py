@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import logging
+import os
 
 from asyncio import AbstractEventLoop, Task, Future
 from typing import Callable, Any, Set, List, Dict, Union, Coroutine, Tuple, Generator
@@ -8,6 +9,7 @@ from typing import Callable, Any, Set, List, Dict, Union, Coroutine, Tuple, Gene
 from .event_listener import EventListener, Priority
 from .event import Event
 from .event_type import EventType
+from .executor import Executor
 
 
 class EventDispatcher:
@@ -16,11 +18,23 @@ class EventDispatcher:
     """
     UNLIMITED_RESPONDERS = -1
 
-    def __init__(self, loop: asyncio.AbstractEventLoop = None, debug_mode: bool = False):
+    def __init__(
+            self,
+            loop: asyncio.AbstractEventLoop = None,
+            use_threaded_executor: bool = True,
+            max_executor_workers: int = -1,
+            debug_mode: bool = False,
+    ):
         """
         Initialize the EventDispatcher.
 
+        :param loop: The event loop to use. If not provided, try to get the existing loop.
+                     If all fails it creates a new event loop.
         :param debug_mode: Enable debug mode for logging.
+        :param use_threaded_executor: Flag to choose between using a threaded or process-based executor.
+                                      Defaults to using a threaded executor (ThreadPoolExecutor).
+        :param max_executor_workers: The maximum number of workers for the underlying executor.
+                                     Defaults to -1 which uses the available logical CPU count.
         """
         self.debug_mode = debug_mode
 
@@ -28,20 +42,28 @@ class EventDispatcher:
         self._sync_canceled_future_events: Dict[str, int] = {}
         self._busy_listeners: Set[Coroutine] = set()
 
-        # event loop
-        self._event_queue_manager_task: Task = None # noqa
+        # Event loop and related components
+        self._event_queue_manager_task: Task = None  # noqa
         self._event_loop = self._set_event_loop(loop)
         self._event_queue = asyncio.Queue()
-        self._queue_empty_event = asyncio.Event()
+        self._queue_empty_event = asyncio.Event()  # Event signaling an empty queue
 
-        # tasks
-        self._running_async_tasks: Dict[str, List[Task]] = {}
-        self._time_until_final_task = 0
+        # Dictionary to hold running tasks
+        self._running_tasks: Dict[str, List[Union[Task, Future]]] = {}
+        self._time_until_final_task = 0  # Time until the final task is complete
 
-        # flags
+        # Flags for controlling event dispatch and queue status
         self._cancel_events = False
         self._is_queue_primed = False
         self._is_event_loop_running = False
+
+        # Determine the total number of workers based on available logical cores
+        cpu_count = os.cpu_count()
+        total_logical_cores = cpu_count if cpu_count else 1
+        total_workers = max_executor_workers if max_executor_workers != -1 else total_logical_cores
+
+        # Initialize the executor for handling asynchronous tasks
+        self._executor = Executor(max_workers=total_workers)
 
     def start(self):
         """
@@ -53,48 +75,77 @@ class EventDispatcher:
 
     async def close(self, wait_for_scheduled_tasks: bool = True):
         """
-        Close the event loop and wait for queued and scheduled events to be processed and ran.
+        Close the event loop and wait for queued and scheduled events to be processed.
+
+        :param wait_for_scheduled_tasks: Flag to indicate whether to wait for scheduled tasks to complete.
         """
-        if self._is_queue_primed:
-            # wait for all events in the queue to be processed
-            await self._queue_empty_event.wait()
-        else:
-            # if no events have been placed in the queue cancel the task, so we don't
-            # indefinitely wait for an event
-            self._event_queue_manager_task.cancel('canceling queue manager, due to no events to process')
+        try:
+            if self._is_queue_primed:
+                # Wait for all events in the queue to be processed
+                await self._queue_empty_event.wait()
+            else:
+                # If no events have been placed in the queue, cancel the task to avoid indefinite waiting
+                self._event_queue_manager_task.cancel('Canceling queue manager due to no events to process')
 
-        if wait_for_scheduled_tasks:
-            # get the time left until the final task is complete
-            final_task_complete_time = self._time_until_final_task - self._loop.time()
-            # ensure the value is positive or zero(z)
-            z_final_task_complete_time = final_task_complete_time if final_task_complete_time > 0 else 0
-            await asyncio.sleep(z_final_task_complete_time)
+            if wait_for_scheduled_tasks:
+                # Calculate the time left until the final task is complete
+                final_task_complete_time = self._time_until_final_task - self._loop.time()
+                # Ensure the value is positive or zero(z)
+                z_final_task_complete_time = final_task_complete_time if final_task_complete_time > 0 else 0
+                await asyncio.sleep(z_final_task_complete_time)
 
-        tasks = []
-        for k, v in self._running_async_tasks.items():
-            for task in v:
-                if task.cancelled():
-                    continue
-                tasks.append(task)
+            submitted_futures = self._executor.get_running_futures()
+            # all futures and tasks that have been created are collected here
+            waitables_collection: Dict[AbstractEventLoop, List[Union[Task, Future]]] = {}
 
-        for task in asyncio.all_tasks(loop=self._event_loop):
-            if task.get_coro().__name__ == "_async_trigger":
-                tasks.append(task)
-        # wait for all the running events to finish
-        await asyncio.gather(*tasks)
+            # here we collect all the running tasks (async Events)
+            for _, running_tasks in self._running_tasks.items():
+                for task in running_tasks:
+                    if task.cancelled() or task.done():
+                        continue
+                    loop = task.get_loop()
+
+                    if waitables_collection.get(loop):
+                        waitables_collection[loop].append(task)
+                    else:
+                        waitables_collection[loop] = [task]
+
+            # here we collect all the futures (sync Events)
+            for loop, futures in submitted_futures.items():
+                running_futures = [future for future in futures if not (future.cancelled() and future.done())]
+
+                if waitables_collection.get(loop):
+                    waitables_collection[loop].extend(*running_futures)
+                else:
+                    waitables_collection[loop] = running_futures
+
+            # wait for the completion of the varius tasks and futures running based on their loop
+            for loop, waitables in waitables_collection.items():
+                print(waitables)
+                await asyncio.gather(*waitables)
+
+            self._executor.shutdown()
+
+        except Exception as e:
+            # this is temp and for debugging
+            print(e)
+            raise
+
         self._is_event_loop_running = False
 
-    def add_listener(self, event_name: str, listener: Callable, priority: Priority = Priority.NORMAL, allow_busy_trigger: bool = True) -> None:
+    def add_listener(self, event_name: str, listener: Callable, priority: Priority = Priority.NORMAL,
+                     allow_busy_trigger: bool = True, event_type: EventType = EventType.Base) -> None:
         """
         Add a listener to the event.
 
+        :param event_type: the type of event to respond to, EventType.Base responds to all types
         :param allow_busy_trigger: allow the listener to be trigger even if it's still running
         :param event_name: Name of the event.
         :param listener: Callable object representing the listener function.
         :param priority: Priority of the listener.
         """
         if callable(listener):
-            self._register_event_listener(event_name, listener, priority, allow_busy_trigger)
+            self._register_event_listener(event_name, listener, priority, allow_busy_trigger, event_type)
             self._sort_listeners(event_name)
         else:
             raise ValueError("Listener must be callable (a function or method).")
@@ -147,16 +198,16 @@ class EventDispatcher:
         else:
             self._sync_canceled_future_events[event_name] = 1
 
-    def cancel_async_event(self, event_name: str) -> None:
+    def cancel_event(self, event_name: str) -> None:
         """
-        Cancel all running asynchronous tasks associated with a specific event.
+        Cancel all running tasks associated with a specific event.
 
         This method cancels all running asynchronous tasks that are associated with a given event (`event_name`). It
         retrieves the tasks related to the specified event and attempts to cancel each task.
 
         :param event_name: The name or identifier of the event for which running asynchronous tasks should be canceled.
         """
-        for task in self._running_async_tasks.get(event_name, []):
+        for task in self._running_tasks.get(event_name, []):
             try:
                 task.cancel()
             except asyncio.CancelledError:
@@ -188,12 +239,20 @@ class EventDispatcher:
             return
 
         responses = 0
+        max_responders = event.max_responders if event.max_responders != EventDispatcher.UNLIMITED_RESPONDERS else float('inf')
+
         for listener in self._get_listeners(event):
-            if event.max_responders != EventDispatcher.UNLIMITED_RESPONDERS and responses >= event.max_responders:
+            if responses >= max_responders:
                 return
 
             self._run_sync_listener(listener, event, *args, **kwargs)
             responses += 1
+
+        if event.on_event_finish:
+            try:
+                self._safe_run_callable(event.on_event_finish)
+            except RuntimeWarning:
+                raise Exception("on finish callbacks can only be sync in a sync context")
 
     def _run_sync_listener(self, listener: EventListener, event: Event, *args, **kwargs):
         """
@@ -211,8 +270,15 @@ class EventDispatcher:
         """
         if self.debug_mode:
             self._log_listener_call(listener, event, False)
+        try:
 
-        listener.callback(event, *args, **kwargs)
+            future = self._executor.submit(listener.callback, event, *args, **kwargs)
+
+            if callable(event.on_listener_finish):
+                future.add_done_callback(event.on_listener_finish)
+
+        except Exception as e:
+            print(e)
 
     async def async_trigger(self, event: Event, *args: Any, **kwargs: Any) -> None:
         """
@@ -282,18 +348,23 @@ class EventDispatcher:
         max_responders = event.max_responders if event.max_responders != EventDispatcher.UNLIMITED_RESPONDERS else len(
             listeners)
 
-        callable_listeners = []
-        for event_listener in self._get_listeners(event):
-            if event_listener.allow_busy_trigger or event_listener.callback not in self._busy_listeners or event.include_busy_listeners:
-                callable_listeners.append(event_listener)
+        callable_listeners = [event_listener for event_listener in self._get_listeners(event)
+                              if
+                              (event_listener.allow_busy_trigger or event_listener.callback not in self._busy_listeners
+                               or event.include_busy_listeners)]
 
+        for event_listener in callable_listeners:
             if event_listener.callback not in self._busy_listeners:
                 self._busy_listeners.add(event_listener.callback)
 
-        # Asynchronously execute listeners for the event.
-        await asyncio.gather(
-            *[self._run_async_listener(listener, event, *args, **kwargs) for listener in callable_listeners[:max_responders]]
-        )
+        listeners_to_execute = callable_listeners[:max_responders]
+
+        tasks = [self._run_async_listener(listener, event, *args, **kwargs) for listener in listeners_to_execute]
+
+        if event.on_event_finish:
+            await self._safe_run_callable(event.on_event_finish)
+
+        await asyncio.gather(*tasks)
 
     async def _run_async_listener(self, listener: EventListener, event: Event, *args, **kwargs):
         """
@@ -309,38 +380,23 @@ class EventDispatcher:
 
         task = self._event_loop.create_task(listener.callback(event, *args, **kwargs))
 
-        if self._running_async_tasks.get(event.event_name):
-            self._running_async_tasks[event.event_name].append(task)
-        else:
-            self._running_async_tasks[event.event_name] = [task]
+        if event.on_listener_finish:
+            task.add_done_callback(event.on_listener_finish)
 
-        callback = functools.partial(self._clean_up_async_task, event, listener, task)
-        task.add_done_callback(callback)
+        self._add_task_to_running_tasks(task, event)
 
-    def _clean_up_async_task(self, event: Event, listener: EventListener, task: Task, future: Future):
-        """
-        Clean up after the completion of an asynchronous task associated with an event.
+        cleanup = functools.partial(self._clean_up_tracked_task, event, listener, task)
+        task.add_done_callback(cleanup)
 
-        This method performs cleanup actions after the completion of an asynchronous task (`task`) that was associated
-        with a specific event (`event`) and executed by a particular event listener (`listener`).
-
-        It removes the listener from the set of busy listeners (`_busy_listeners`), updates the list of running asynchronous
-        tasks (`_running_async_tasks`) for the event by removing the completed task, and checks if there are no more tasks
-        associated with the event to remove the event from the running task's dictionary.
-
-        :param event: The event associated with the completed task.
-        :param listener: The EventListener whose task has been completed.
-        :param task: The completed asyncio Task object.
-        :param future: The Future associated with the completed task.
-        """
+    def _clean_up_tracked_task(self, event: Event, listener: EventListener, task: Task, future: Future):
         if listener.callback in self._busy_listeners:
             self._busy_listeners.remove(listener.callback)
 
-        if self._running_async_tasks.get(event.event_name):
-            self._running_async_tasks[event.event_name].remove(task)
+        if self._running_tasks.get(event.event_name):
+            self._running_tasks[event.event_name].remove(task)
 
-        if len(self._running_async_tasks.get(event.event_name)) == 0:
-            self._running_async_tasks.pop(event.event_name)
+        if len(self._running_tasks.get(event.event_name)) == 0:
+            self._running_tasks.pop(event.event_name)
 
     def disable_all_events(self) -> None:
         """
@@ -377,13 +433,24 @@ class EventDispatcher:
 
         return False
 
+    @staticmethod
+    async def _safe_run_callable(func: Union[Callable, Coroutine], *args, **kwargs) -> None:
+        if not callable(func):
+            return
+
+        if asyncio.iscoroutinefunction(func):
+            await func(*args, **kwargs)
+        else:
+            func(*args, **kwargs)
+
     def _get_listeners(self, event: Event) -> Generator[EventListener, None, None]:
         for listener in self._listeners.get(event.event_name, []):
             if not self._does_event_type_match(listener, event):
                 continue
             yield listener
 
-    def _register_event_listener(self, event_name: str, callback: Callable, priority: Priority, allow_busy_trigger: bool = True, event_type: EventType = EventType.Base) -> None:
+    def _register_event_listener(self, event_name: str, callback: Callable, priority: Priority,
+                                 allow_busy_trigger: bool = True, event_type: EventType = EventType.Base) -> None:
         """
         Register an event listener for the specified event.
 
@@ -392,7 +459,8 @@ class EventDispatcher:
         :param callback: Callable object representing the listener function.
         :param priority: Priority of the listener.
         """
-        listener = EventListener(callback=callback, priority=priority, allow_busy_trigger=allow_busy_trigger, event_type=event_type)
+        listener = EventListener(callback=callback, priority=priority, allow_busy_trigger=allow_busy_trigger,
+                                 event_type=event_type)
 
         # if the callback is already registered in the event, return
         if listener.callback in [lstener for lstener in self._listeners.get(event_name, [])]:
@@ -444,6 +512,12 @@ class EventDispatcher:
 
         return self._loop
 
+    def _add_task_to_running_tasks(self, task: Union[Task, Future], event: Event) -> None:
+        if self._running_tasks.get(event.event_name):
+            self._running_tasks[event.event_name].append(task)
+        else:
+            self._running_tasks[event.event_name] = [task]
+
     def _event_cancellation_handler(self, event: Event) -> bool:
         # if the event has not been canceled at least once return false
         if not self._sync_canceled_future_events.get(event.event_name, 0):
@@ -466,12 +540,10 @@ class EventDispatcher:
             event_executor, event, args, kwargs = queue_item
 
             if asyncio.iscoroutinefunction(event_executor):
-                task = self._event_loop.create_task(event_executor(event, *args, **kwargs))
-                if callable(event.on_finish): task.add_done_callback(event.on_finish)
+                self._event_loop.create_task(event_executor(event, *args, **kwargs))
             else:
-                # for synchronous functions, use asyncio.to_thread to run them in a separate thread
-                await asyncio.to_thread(event_executor, event, *args, **kwargs)
-                if callable(event.on_finish): event.on_finish()
+                # here it will run self._sync_trigger
+                event_executor(event, *args, **kwargs)
 
             # if the queue is empty set the empty event (true)
             if self._event_queue.empty():

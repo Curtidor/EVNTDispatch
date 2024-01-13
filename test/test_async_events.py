@@ -141,7 +141,7 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(SLEEP_VALUE)
 
         event_dispatcher.add_listener('test', listener_one)
-        await event_dispatcher.async_trigger(Event('test', EventType.Base, on_finish=event_set_callback))
+        await event_dispatcher.async_trigger(Event('test', EventType.Base, on_listener_finish=event_set_callback))
 
         try:
             await asyncio.wait_for(event_done.wait(), SLEEP_VALUE + ERROR_VALUE)
@@ -164,7 +164,7 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         await event_dispatcher.async_trigger(Event('test', EventType.Base))
 
         await asyncio.sleep(1)
-        event_dispatcher.cancel_async_event('test')
+        event_dispatcher.cancel_event('test')
         await event_dispatcher.close()
 
         self.assertEqual(0, len(collected_values))

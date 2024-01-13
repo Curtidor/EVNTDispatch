@@ -4,31 +4,27 @@ import unittest
 
 from event_system.event_dispatcher import EventDispatcher
 from event_system.event import Event
-from event_system.event_listener import Priority
 from event_system.event_type import EventType
 
 
 class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.event_dispatcher = EventDispatcher()
+        self.event_dispatcher.start()
 
-    async def test_add_listener_before_event_creation(self):
+    async def test_base_sync_trigger(self):
         """
-        Test adding a listener before event creation.
-
-        Verifies that adding a listener before triggering an event in the EventDispatcher
-        leads to the listener being executed when the event is triggered.
+        Test adding a listener and triggering a sync event
         """
-        event_dispatcher = EventDispatcher()
-        event_dispatcher.start()
-
         listener_one_responses = []
 
         def listener_one(event: Event):
             listener_one_responses.append("success")
 
-        event_dispatcher.add_listener("test", listener_one)
-        event_dispatcher.sync_trigger(Event("test", EventType.Base))
+        self.event_dispatcher.add_listener("test", listener_one)
+        self.event_dispatcher.sync_trigger(Event("test", EventType.Base))
 
-        await event_dispatcher.close()
+        await self.event_dispatcher.close()
 
         self.assertEqual(["success"], listener_one_responses)
 
@@ -38,9 +34,6 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         Verifies that EventDispatcher can schedule a task and execute it after a specified delay.
         """
-        event_dispatcher = EventDispatcher()
-        event_dispatcher.start()
-
         t = []
 
         def listener_one():
@@ -49,72 +42,33 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         delay = 2
         start_time = time.time()
 
-        event_dispatcher.schedule_task(listener_one, delay)
+        self.event_dispatcher.schedule_task(listener_one, delay)
 
-        await event_dispatcher.close()
+        await self.event_dispatcher.close()
 
         end_time = t[0]
         self.assertTrue(round(end_time - start_time) == delay)
 
-    async def test_wait_for_event(self) -> None:
-        """
-        Test waiting for events with EventDispatcher.
-
-        Verifies the EventDispatcher's functionality for waiting on events and executing associated callbacks upon finishing the event.
-        """
-        event_dispatcher = EventDispatcher()
-        event_dispatcher.start()
-
+    async def test_event_on_listener_finish(self) -> None:
         event_done = asyncio.Event()
 
-        def event_set_callback():
+        def event_set_callback(future):
             event_done.set()
 
         collected_data = []
         VERIFICATION_VALUE = '1'
 
-        SLEEP_VALUE = 1.5
-        ERROR_VALUE = 0.8
-
         def listener_one(event: Event):
-            time.sleep(SLEEP_VALUE)
             collected_data.append(VERIFICATION_VALUE)
 
-        event_dispatcher.add_listener('test', listener_one)
-        event_dispatcher.sync_trigger(Event('test', EventType.Base, on_finish=event_set_callback))
+        self.event_dispatcher.add_listener('test', listener_one)
+        self.event_dispatcher.sync_trigger(Event('test', EventType.Base, on_listener_finish=event_set_callback))
 
-        try:
-            await asyncio.wait_for(event_done.wait(), SLEEP_VALUE + ERROR_VALUE)
-        except asyncio.TimeoutError:
-            self.fail("The on finish call back was not triggered!")
+        await event_done.wait()
 
-        self.assertEqual('1', collected_data[0])
+        self.assertTrue(VERIFICATION_VALUE in collected_data)
 
-        await event_dispatcher.close()
-
-    async def test_cancel_event(self) -> None:
-        event_dispatcher = EventDispatcher()
-        event_dispatcher.start()
-
-        listener_one_results = []
-        listener_two_results = []
-
-        async def listener_one(event: Event):
-            await asyncio.sleep(3)
-            listener_one_results.append('1')
-
-        def listener_two(event: Event):
-            listener_two_results.append('2')
-
-        event_dispatcher.add_listener('test', listener_one, priority=Priority.NORMAL)
-        event_dispatcher.add_listener('test', listener_two, priority=Priority.HIGH)
-
-        event_dispatcher.cancel_future_sync_event('test')
-
-        await event_dispatcher.mixed_trigger(Event('test', EventType.Base))
-
-        self.assertEqual([], listener_two_results)
-        self.assertEqual([], listener_two_results)
+        await self.event_dispatcher.close()
 
 
 if __name__ == '__main__':

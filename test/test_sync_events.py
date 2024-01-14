@@ -2,6 +2,8 @@ import asyncio
 import time
 import unittest
 
+from math import isclose
+
 from event_system.event_dispatcher import EventDispatcher, Priority
 from event_system.pevent import PEvent
 from event_system.event_type import EventType
@@ -66,8 +68,12 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         await self.event_dispatcher.close()
 
-        end_time = t[0]
-        self.assertTrue(round(end_time - start_time) == delay)
+        try:
+            end_time = t[0]
+        except IndexError:
+            self.fail('scheduled task was not ran')
+
+        self.assertTrue(isclose((end_time - start_time), delay, abs_tol=0.35))
 
     async def test_event_on_listener_finish(self) -> None:
         event_done = asyncio.Event()
@@ -89,6 +95,38 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(VERIFICATION_VALUE in collected_data)
 
         await self.event_dispatcher.close()
+
+    async def cancel_future_event(self):
+        listener_one_responses = []
+        listener_two_responses = []
+        listener_three_responses = []
+
+        def listener_one(event: PEvent):
+            listener_one_responses.append("item")
+
+        def listener_two(event: PEvent):
+            listener_two_responses.append("item")
+
+        def listener_three(event: PEvent):
+            listener_three_responses.append('item')
+
+        self.event_dispatcher.add_listener('test', listener_one)
+        self.event_dispatcher.add_listener('test', listener_two)
+
+        self.event_dispatcher.cancel_future_sync_event('test')
+
+        self.event_dispatcher.sync_trigger(PEvent('test', EventType.Base))
+
+        self.event_dispatcher.add_listener('test', listener_three)
+        self.event_dispatcher.remove_listeners('test', (listener_one, listener_two))
+
+        self.event_dispatcher.sync_trigger(PEvent('test', EventType.Base))
+
+        await self.event_dispatcher.close()
+
+        self.assertEqual([], listener_one_responses)
+        self.assertEqual([], listener_two_responses)
+        self.assertEqual(['item'], listener_three_responses)
 
 
 if __name__ == '__main__':

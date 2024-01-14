@@ -10,29 +10,46 @@ PyTrigger is a Python-based event-driven system that simplifies event management
 - **Priority-based Execution:** Execute listeners based on their assigned priority levels.
 - **Scalability and Customization:** Scalable for different application scales and highly customizable.
 
-## Basic Example
+## Basic Async Example
 
 ```python
-from pytrigger import EventDispatcher, Event, EventType, Priority
+import asyncio
 
-# Create an instance of the EventDispatcher
+from event_system.event_dispatcher import EventDispatcher, PEvent, EventType
+
 dispatcher = EventDispatcher()
 
-# Define an event called "example_event" of type USER_ACTION
-my_event = Event(event_name="example_event", event_type=EventType.USER_ACTION)
+
+async def process_message(event: PEvent):
+    message_data, user_id = event.data
+    # Simulate processing the message, e.g., storing it in a database or applying business logic
+    print(f"Processing Message from User {user_id}: {message_data}")
+    await asyncio.sleep(1)
+    print("Message Processed")
 
 
-# Define a listener function to handle the event
-def on_event_triggered(event):
-    # Print a message when the event is triggered
-    print(f"Event '{event.event_name}' was triggered!")
+async def send_message(user_id: int, message: str):
+    await dispatcher.async_trigger(PEvent("new_message", EventType.Base, data=(message, user_id)))
 
 
-# Register the listener function for the "example_event" event with normal priority
-dispatcher.add_listener("example_event", on_event_triggered, priority=Priority.NORMAL)
+async def main():
+    dispatcher.start()
 
-# Trigger the "example_event" by dispatching the event through the EventDispatcher
-dispatcher.sync_trigger(my_event)
+    dispatcher.add_listener("new_message", process_message)
+
+    # Simulate users sending messages
+    task = [send_message(1, "Hello, how are you?"),
+            send_message(2, "I'm doing well, thanks!"),
+            send_message(1, "What's new?"),
+            send_message(3, "Not much, just relaxing.")
+            ]
+    await asyncio.gather(*task)
+
+    await dispatcher.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ## Advanced Usage

@@ -28,5 +28,5 @@ class EventListener:
         return self.priority.value < other.priority.value
 
     def __hash__(self) -> int:
-        # We can use the hash value of the priority enum directly
-        return hash(self.priority)
+        return hash((self.priority, self.callback, self.event_type))
+

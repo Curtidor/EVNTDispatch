@@ -20,22 +20,26 @@ class Executor:
     def get_running_futures(self) -> Dict[AbstractEventLoop, Set[Future]]:
         return self._running_futures
 
-    def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> Future:
+    def submit(self, fn: Callable, *args: Any, is_scheduled_task: bool = False, **kwargs: Any,) -> Future:
         """
         Submits a callable function for execution.
 
         :param fn: The callable function to execute.
         :param args: Arguments to pass to the function.
+        :param is_scheduled_task: bool to indicate if the submission comes from the scheduling system, external users should never
+               set it to 'True' as it will lead to unexpected behaviour
         :param kwargs: Keyword arguments to pass to the function.
         :return: Future object representing the execution of the function.
         """
         try:
             future = self._executor.submit(fn, *args, **kwargs)
 
+            if is_scheduled_task:
+                return future
+
             loop = asyncio.get_event_loop()
 
             wrapped_future = asyncio.wrap_future(future, loop=loop)
-
             cleanup = functools.partial(self._future_finished, loop)
 
             self._add_future_to_running_list(loop, wrapped_future)

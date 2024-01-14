@@ -9,5 +9,5 @@ setup(
         'pytest'
     ],
     description="A Python event system enabling synchronous and asynchronous event handling within applications, ensuring efficient communication between different components.",
-    long_description=open('README.txt').read(),
+    long_description="",
 )

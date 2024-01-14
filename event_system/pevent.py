@@ -5,7 +5,7 @@ from .event_type import EventType
 
 
 @dataclass
-class Event:
+class PEvent:
     event_name: str
     event_type: EventType
     data: Any = None

@@ -1,5 +1,8 @@
 import asyncio
+import time
 import unittest
+
+from math import isclose
 
 from event_system.event_dispatcher import EventDispatcher
 from event_system.pevent import PEvent
@@ -8,6 +11,13 @@ from event_system.event_type import EventType
 
 
 class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
+
+    async def asyncSetUp(self):
+        """
+        Setup method to initialize the EventDispatcher before each test.
+        """
+        self.event_dispatcher = EventDispatcher(debug_mode=True)
+        self.event_dispatcher.start()
 
     async def test_async_busy_listeners_handling(self):
         """
@@ -19,9 +29,6 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         listener_one_results = []
         listener_two_results = []
 
-        event_dispatcher = EventDispatcher(debug_mode=True)
-        event_dispatcher.start()
-
         async def listener_one(event):
             await asyncio.sleep(2)
             listener_one_results.append("success")
@@ -29,13 +36,13 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         async def listener_two(event):
             listener_two_results.append("success")
 
-        event_dispatcher.add_listener("test", listener_one, allow_busy_trigger=False)
-        event_dispatcher.add_listener("test", listener_two)
+        self.event_dispatcher.add_listener("test", listener_one, allow_busy_trigger=False)
+        self.event_dispatcher.add_listener("test", listener_two)
 
-        await event_dispatcher.async_trigger(PEvent("test", EventType.Base))
-        await event_dispatcher.async_trigger(PEvent("test", EventType.Base))
+        await self.event_dispatcher.async_trigger(PEvent("test", EventType.Base))
+        await self.event_dispatcher.async_trigger(PEvent("test", EventType.Base))
 
-        await event_dispatcher.close()
+        await self.event_dispatcher.close()
 
         self.assertEqual(["success"], listener_one_results)
         self.assertEqual(["success", "success"], listener_two_results)
@@ -49,20 +56,18 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         listener_one_results = []
         listener_two_results = []
 
-        event_dispatcher = EventDispatcher()
-        event_dispatcher.start()
-
         async def listener_one(event):
             listener_one_results.append("success")
 
         async def listener_two(event):
             listener_two_results.append("success")
 
-        event_dispatcher.add_listener("test", listener_one, priority=Priority.NORMAL)
-        event_dispatcher.add_listener("test", listener_two, priority=Priority.HIGH)
+        self.event_dispatcher.add_listener("test", listener_one, priority=Priority.NORMAL)
+        self.event_dispatcher.add_listener("test", listener_two, priority=Priority.HIGH)
 
-        await event_dispatcher.async_trigger(PEvent("test", EventType.Base, max_responders=1))
-        await event_dispatcher.close()
+        await self.event_dispatcher.async_trigger(PEvent("test", EventType.Base, max_responders=1))
+
+        await self.event_dispatcher.close()
 
         self.assertEqual(listener_one_results, [])
         self.assertEqual(listener_two_results, ["success"])
@@ -73,25 +78,20 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         Verifies that registering a callback with the same name as a busy listener under a different event works as expected.
         """
-        event_dispatcher = EventDispatcher()
-        event_dispatcher.start()
-
         collected_data = []
 
         async def listener_one(event: PEvent):
             await asyncio.sleep(1.5)
             collected_data.append('s')
 
-        event_dispatcher.add_listener("test 1", listener_one)
-        # trigger listen_one with event (test 1)
-        await event_dispatcher.async_trigger(PEvent("test 1", EventType.Base))
+        self.event_dispatcher.add_listener("test 1", listener_one)
+        await self.event_dispatcher.async_trigger(PEvent("test 1", EventType.Base))
 
-        # register the same callback under a different event
-        event_dispatcher.add_listener("test 2", listener_one, allow_busy_trigger=False)
-        # trigger listen_one with event (test 2)
-        await event_dispatcher.async_trigger(PEvent("test 2", EventType.Base))
+        self.event_dispatcher.add_listener("test 2", listener_one, allow_busy_trigger=False)
+        await self.event_dispatcher.async_trigger(PEvent("test 2", EventType.Base))
 
-        await event_dispatcher.close()
+        await self.event_dispatcher.close()
+
         self.assertEqual(1, len(collected_data))
 
     async def test_schedule_task(self):
@@ -100,7 +100,26 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         Verifies the EventDispatcher's ability to schedule tasks and execute them.
         """
-        pass  # Implement test logic for scheduling tasks
+        t = []
+        sleep_time = 1
+
+        async def listener_one():
+            await asyncio.sleep(1)
+            t.append(time.time())
+
+        delay = 2
+        start_time = time.time()
+
+        self.event_dispatcher.schedule_task(listener_one, delay)
+
+        await self.event_dispatcher.close()
+
+        try:
+            end_time = t[0]
+        except IndexError:
+            self.fail('scheduled task was not ran')
+
+        self.assertTrue(isclose((end_time - start_time), delay + sleep_time, abs_tol=0.35))
 
     async def test_on_finish_callback(self):
         """
@@ -108,9 +127,6 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         Verifies the EventDispatcher's functionality of correctly triggering the finish callback when the event is finished
         """
-        event_dispatcher = EventDispatcher()
-        event_dispatcher.start()
-
         event_done = asyncio.Event()
 
         def event_set_callback(fut):
@@ -126,32 +142,32 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
             collected_data.append(VERIFICATION_VALUE)
             await asyncio.sleep(SLEEP_VALUE)
 
-        event_dispatcher.add_listener('test', listener_one)
-        await event_dispatcher.async_trigger(PEvent('test', EventType.Base, on_listener_finish=event_set_callback))
+        self.event_dispatcher.add_listener('test', listener_one)
+        await self.event_dispatcher.async_trigger(PEvent('test', EventType.Base, on_listener_finish=event_set_callback))
 
         try:
             await asyncio.wait_for(event_done.wait(), SLEEP_VALUE + ERROR_VALUE)
         except asyncio.TimeoutError:
             self.fail("The on finish call back was not triggered!")
 
+        await self.event_dispatcher.close()
+
         self.assertEqual('1', collected_data[0])
 
     async def test_cancel_running_async_event(self):
-        event_dispatcher = EventDispatcher()
-        event_dispatcher.start()
-
         collected_values = []
 
         async def listener_one(event):
             await asyncio.sleep(1.3)
             collected_values.append('1')
 
-        event_dispatcher.add_listener('test', listener_one)
-        await event_dispatcher.async_trigger(PEvent('test', EventType.Base))
+        self.event_dispatcher.add_listener('test', listener_one)
+        await self.event_dispatcher.async_trigger(PEvent('test', EventType.Base))
 
         await asyncio.sleep(1)
-        event_dispatcher.cancel_event('test')
-        await event_dispatcher.close()
+        self.event_dispatcher.cancel_event('test')
+
+        await self.event_dispatcher.close()
 
         self.assertEqual(0, len(collected_values))
 

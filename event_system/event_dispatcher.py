@@ -4,7 +4,7 @@ import logging
 import os
 
 from asyncio import AbstractEventLoop, Task, Future
-from typing import Callable, Any, Set, List, Dict, Union, Coroutine, Tuple, Generator
+from typing import Callable, Any, Set, List, Dict, Union, Coroutine, Tuple, Generator, Iterable, Awaitable
 
 from .event_listener import EventListener, Priority
 from .pevent import PEvent
@@ -37,12 +37,13 @@ class EventDispatcher:
 
         # Event loop and related components
         self._event_queue_manager_task: Task = None  # noqa
-        self._event_loop: AbstractEventLoop = None # noqa
+        self._event_loop: AbstractEventLoop = None  # noqa
         self._event_queue = asyncio.Queue()
         self._queue_empty_event = asyncio.Event()  # Event signaling an empty queue
 
         # Dictionary to hold running tasks
         self._running_tasks: Dict[str, List[Union[Task, Future]]] = {}
+        self._running_scheduled_tasks: List[Union[Task, Future]] = []
         self._time_until_final_task = 0  # Time until the final task is complete
 
         # Flags for controlling event dispatch and queue status
@@ -90,6 +91,8 @@ class EventDispatcher:
                 # Ensure the value is positive or zero(z)
                 z_final_task_complete_time = final_task_complete_time if final_task_complete_time > 0 else 0
                 await asyncio.sleep(z_final_task_complete_time)
+
+                await asyncio.gather(*self._running_scheduled_tasks)
 
             submitted_futures = self._executor.get_running_futures()
             # all futures and tasks that have been created are collected here
@@ -146,36 +149,101 @@ class EventDispatcher:
         else:
             raise ValueError("Listener must be callable (a function or method).")
 
-    def remove_listener(self, event_name: str, listener: Callable) -> None:
+    def remove_listener(self, event_name: str, callback: Callable) -> None:
         """
         Remove a listener from the event.
 
         :param event_name: Name of the event.
-        :param listener: Callable object representing the listener function.
+        :param callback: Callable object representing the listener function.
         """
-        for event_listener in self._listeners.get(event_name):
-            if event_listener.callback == listener:
-                self._listeners.get(event_name).remove(event_listener)
-                return  # To ensure only one instance is removed
+        self.remove_listeners(event_name, (callback,))
 
-    def schedule_task(self, func: Callable, exc_time: float, *args) -> None:
+    def remove_listeners(self, event_name: str, callbacks_to_remove: Iterable[Callable]) -> None:
         """
-        Schedule a task to be executed after a specified delay.
+        Remove a group a listeners from the event.
 
-        This method schedules a callable function (`func`) to be executed after a specified time (`exc_time`) on the
-        event loop. The `func` will be called with the provided arguments (`*args`) when the scheduled time is reached.
+        :param event_name: Name of the event.
+        :param callbacks_to_remove: A collection of callable objects to remove
+        """
+        event_listeners = self._listeners.get(event_name)
 
-        :param func: The function or callable to be executed.
-        :param exc_time: The time in seconds after which the function will be called.
-        :param args: Additional arguments to pass to the function.
-        :raises Exception: If there is no event loop running when attempting to schedule the task.
+        for listener in event_listeners:
+            if listener.callback in callbacks_to_remove:
+                event_listeners.remove(listener)
+
+    def schedule_task(self, func: Union[Callable[..., None], Callable[..., Awaitable[None]]], exec_time: float, *args: List) -> None:
+        """
+        Schedule a task to be executed after a specified time.
+
+        Args:
+            func (Union[Callable[..., None], Callable[..., Awaitable[None]]]): The function or coroutine to be scheduled.
+            exec_time (float): The time delay (in seconds) before executing the task.
+            *args: Additional arguments to be passed to the function or coroutine.
+
+        Raises:
+            Exception: If no event loop is running.
+            ValueError: If `func` is not a callable.
+
+        Returns:
+            None
         """
         if not self._is_event_loop_running:
             raise Exception("No event loop running")
 
-        time_handler = self._event_loop.call_later(exc_time, func, *args)
+        if not callable(func):
+            raise ValueError(f"({func}), must be a callable")
+
+        if asyncio.iscoroutinefunction(func):
+            time_handler = self._event_loop.call_later(exec_time, self._schedule_coroutine, func, *args)
+        else:
+            time_handler = self._event_loop.call_later(exec_time, self._schedule_func, func, *args)
 
         self._time_until_final_task = time_handler.when()
+
+    def _schedule_coroutine(self, coro: Callable[..., Awaitable[None]], *args: List) -> None:
+        """
+        Internal method to schedule the execution of a coroutine after a specified time.
+
+        Args:
+            coro (Callable[..., Awaitable[None]]): The coroutine to be scheduled.
+            *args: Additional arguments to be passed to the coroutine.
+
+        Returns:
+            None
+        """
+
+        async def wrapper():
+            await coro(*args)
+
+        task = self._event_loop.create_task(wrapper())
+
+        self._running_scheduled_tasks.append(task)
+
+        cleanup = functools.partial(self._clean_up_scheduled_task, task)
+
+        task.add_done_callback(cleanup)
+
+    def _schedule_func(self, func: Callable[..., None], *args: List) -> None:
+        """
+        Internal method to schedule the execution of a function after a specified time.
+
+        Args:
+            func (Callable[..., None]): The function to be scheduled.
+            *args: Additional arguments to be passed to the coroutine.
+
+        Returns:
+            None
+        """
+
+        future = self._executor.submit(func, *args, is_scheduled_task=True)
+
+        wrapped_future = asyncio.wrap_future(future, loop=self._event_loop)
+
+        self._running_scheduled_tasks.append(wrapped_future)
+
+        cleanup = functools.partial(self._clean_up_scheduled_task, wrapped_future)
+
+        wrapped_future.add_done_callback(cleanup)
 
     def cancel_future_sync_event(self, event_name: str) -> None:
         """
@@ -235,7 +303,8 @@ class EventDispatcher:
             return
 
         responses = 0
-        max_responders = event.max_responders if event.max_responders != EventDispatcher.UNLIMITED_RESPONDERS else float('inf')
+        max_responders = event.max_responders if event.max_responders != EventDispatcher.UNLIMITED_RESPONDERS else float(
+            'inf')
 
         for listener in self._get_listeners(event):
             if responses >= max_responders:
@@ -316,10 +385,12 @@ class EventDispatcher:
 
         self._is_queue_primed = True
 
+        is_sync_event_cancelled = self._is_sync_event_cancelled(event)
+
         for listener in self._get_listeners(event):
             if asyncio.iscoroutinefunction(listener.callback):
                 await self._run_async_listener(listener, event, *args, **kwargs)
-            else:
+            elif not is_sync_event_cancelled:
                 self._run_sync_listener(listener, event, *args, **kwargs)
 
     async def _async_trigger(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
@@ -382,15 +453,48 @@ class EventDispatcher:
         cleanup = functools.partial(self._clean_up_tracked_task, event, listener, task)
         task.add_done_callback(cleanup)
 
-    def _clean_up_tracked_task(self, event: PEvent, listener: EventListener, task: Task, future: Future):
+    def _clean_up_tracked_task(self, event: PEvent, listener: EventListener, task: Task, future: Future) -> None:
+        """
+        Clean up tracked tasks that have finished.
+
+        Parameters:
+        - event (PEvent): The event associated with the task.
+        - listener (EventListener): The listener associated with the task.
+        - task (Task): The task to clean up.
+        - future (Future): The future associated with the task.
+
+        Returns:
+        None
+        """
         if listener.callback in self._busy_listeners:
             self._busy_listeners.remove(listener.callback)
 
         if self._running_tasks.get(event.event_name):
-            self._running_tasks[event.event_name].remove(task)
+            try:
+                self._running_tasks[event.event_name].remove(task)
+            except ValueError:
+                # This error should never trigger, but just in case, catch it.
+                pass
 
-        if len(self._running_tasks.get(event.event_name)) == 0:
+        if len(self._running_tasks.get(event.event_name, [])) == 0:
             self._running_tasks.pop(event.event_name)
+
+    def _clean_up_scheduled_task(self, waitable: Union[Future, Task], future: Future) -> None:
+        """
+        Clean up a scheduled task.
+
+        Parameters:
+        - waitable (Union[Future, Task]): The scheduled task to clean up.
+        - future (Future): The future associated with the scheduled task.
+
+        Returns:
+        None
+        """
+        try:
+            self._running_scheduled_tasks.remove(waitable)
+        except ValueError:
+            # This error should never trigger, but just in case, catch it.
+            pass
 
     def disable_all_events(self) -> None:
         """
@@ -424,22 +528,31 @@ class EventDispatcher:
 
     @staticmethod
     def _does_event_type_match(listener: EventListener, event: PEvent) -> bool:
+        """
+        Check if the event type of listener matches the event's type.
+
+        Parameters:
+        - listener (EventListener): The event listener to check.
+        - event (PEvent): The event to compare the type with.
+
+        Returns:
+        bool: True if the event types match or the listener's event type is EventType.Base, False otherwise.
+        """
         if listener.event_type == EventType.Base or listener.event_type == event.event_type:
             return True
 
         return False
 
-    @staticmethod
-    async def _safe_run_callable(func: Union[Callable, Coroutine], *args, **kwargs) -> None:
-        if not callable(func):
-            return
-
-        if asyncio.iscoroutinefunction(func):
-            await func(*args, **kwargs)
-        else:
-            func(*args, **kwargs)
-
     def _get_listeners(self, event: PEvent) -> Generator[EventListener, None, None]:
+        """
+        Retrieve listeners associated with a specific event.
+
+        Parameters:
+        - event (PEvent): The event for which listeners are to be retrieved.
+
+        Yields:
+        EventListener: The next event listener associated with the specified event.
+        """
         for listener in self._listeners.get(event.event_name, []):
             if not self._does_event_type_match(listener, event):
                 continue
@@ -512,20 +625,38 @@ class EventDispatcher:
         return self._event_loop
 
     def _add_task_to_running_tasks(self, task: Union[Task, Future], event: PEvent) -> None:
+        """
+        Add a task associated with a specific event to the running tasks.
+
+        Parameters:
+        - task (Union[Task, Future]): The task or future to be added to the running tasks.
+        - event (PEvent): The event associated with the task.
+
+        Returns:
+        None
+        """
         if self._running_tasks.get(event.event_name):
             self._running_tasks[event.event_name].append(task)
         else:
             self._running_tasks[event.event_name] = [task]
 
     def _is_sync_event_cancelled(self, event: PEvent) -> bool:
+        """
+        Check if a synchronous event has been canceled.
 
-        # if the event has not been canceled at least once return false
+        Parameters:
+        - event (PEvent): The event to check for cancellation.
+
+        Returns:
+        bool: True if the event has been canceled, False otherwise.
+        """
+        # If the event has not been canceled at least once, return false
         if not self._sync_canceled_future_events.get(event.event_name, 0):
             return False
 
         self._sync_canceled_future_events[event.event_name] -= 1
 
-        # remove the event data from the dict
+        # Remove the event data from the dictionary
         if self._sync_canceled_future_events[event.event_name] < 1:
             self._sync_canceled_future_events.pop(event.event_name)
 

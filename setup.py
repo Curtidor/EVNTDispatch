@@ -18,7 +18,7 @@ setup(
     install_requires=['pytest'],
     keywords=['python'],
     classifiers=[
-        "Development Status :: Alpha",
+        "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
         "Programming Language :: Python :: 3",
         "Operating System :: Unix",

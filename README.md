@@ -1,6 +1,6 @@
-# PyTrigger
+# EVNTDispatch
 
-PyTrigger is a versatile Python library designed to facilitate event-driven programming by providing a flexible event dispatcher. Whether you are building a graphical user interface, a command-line application, or a complex system with asynchronous components, the Event System simplifies communication and coordination between different parts of your code.
+EVNTDispatch is a versatile Python library designed to facilitate event-driven programming by providing a flexible event dispatcher. Whether you are building a graphical user interface, a command-line application, or a complex system with asynchronous components, the Event System simplifies communication and coordination between different parts of your code.
 
 ## Key Features
 * **Event Dispatching:** Easily define and dispatch events to notify components of changes or user interactions.

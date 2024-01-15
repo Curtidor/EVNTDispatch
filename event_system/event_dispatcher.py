@@ -59,6 +59,24 @@ class EventDispatcher:
         # Initialize the executor for handling asynchronous tasks
         self._executor = Executor(max_workers=total_workers)
 
+    @property
+    def is_queue_empty(self) -> bool:
+        """
+        Check if the event queue is empty.
+
+        :return: True if the event queue is empty, False otherwise.
+        """
+        return self._event_queue.empty()
+
+    @property
+    def queue_size(self) -> int:
+        """
+        Get the size of the event queue.
+
+        :return: The number of events in the queue.
+        """
+        return self._event_queue.qsize()
+
     def start(self, loop: AbstractEventLoop = None) -> None:
         """
         Start the event loop if not already running.
@@ -507,24 +525,6 @@ class EventDispatcher:
         Enable all events to be triggered.
         """
         self._cancel_events = False
-
-    @property
-    def is_queue_empty(self) -> bool:
-        """
-        Check if the event queue is empty.
-
-        :return: True if the event queue is empty, False otherwise.
-        """
-        return self._event_queue.empty()
-
-    @property
-    def queue_size(self) -> int:
-        """
-        Get the size of the event queue.
-
-        :return: The number of events in the queue.
-        """
-        return self._event_queue.qsize()
 
     @staticmethod
     def _does_event_type_match(listener: EventListener, event: PEvent) -> bool:

@@ -23,8 +23,8 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         def listener_one(event: PEvent):
             listener_one_responses.append("success")
 
-        self.event_dispatcher.add_listener("test", listener_one)
-        self.event_dispatcher.sync_trigger(PEvent("test", EventType.Base))
+        self.event_dispatcher.add_listener("tests", listener_one)
+        self.event_dispatcher.sync_trigger(PEvent("tests", EventType.Base))
 
         await self.event_dispatcher.close()
 
@@ -40,10 +40,10 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         def listener_two(event: PEvent):
             listener_two_responses.append("success")
 
-        self.event_dispatcher.add_listener("test", listener_one, priority=Priority.NORMAL)
-        self.event_dispatcher.add_listener("test", listener_two, priority=Priority.HIGH)
+        self.event_dispatcher.add_listener("tests", listener_one, priority=Priority.NORMAL)
+        self.event_dispatcher.add_listener("tests", listener_two, priority=Priority.HIGH)
 
-        self.event_dispatcher.sync_trigger(PEvent("test", EventType.Base, max_responders=1))
+        self.event_dispatcher.sync_trigger(PEvent("tests", EventType.Base, max_responders=1))
 
         await self.event_dispatcher.close()
 
@@ -87,8 +87,8 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         def listener_one(event: PEvent):
             collected_data.append(VERIFICATION_VALUE)
 
-        self.event_dispatcher.add_listener('test', listener_one)
-        self.event_dispatcher.sync_trigger(PEvent('test', EventType.Base, on_listener_finish=event_set_callback))
+        self.event_dispatcher.add_listener('tests', listener_one)
+        self.event_dispatcher.sync_trigger(PEvent('tests', EventType.Base, on_listener_finish=event_set_callback))
 
         await event_done.wait()
 
@@ -110,17 +110,17 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         def listener_three(event: PEvent):
             listener_three_responses.append('item')
 
-        self.event_dispatcher.add_listener('test', listener_one)
-        self.event_dispatcher.add_listener('test', listener_two)
+        self.event_dispatcher.add_listener('tests', listener_one)
+        self.event_dispatcher.add_listener('tests', listener_two)
 
-        self.event_dispatcher.cancel_future_sync_event('test')
+        self.event_dispatcher.cancel_future_sync_event('tests')
 
-        self.event_dispatcher.sync_trigger(PEvent('test', EventType.Base))
+        self.event_dispatcher.sync_trigger(PEvent('tests', EventType.Base))
 
-        self.event_dispatcher.add_listener('test', listener_three)
-        self.event_dispatcher.remove_listeners('test', (listener_one, listener_two))
+        self.event_dispatcher.add_listener('tests', listener_three)
+        self.event_dispatcher.remove_listeners('tests', (listener_one, listener_two))
 
-        self.event_dispatcher.sync_trigger(PEvent('test', EventType.Base))
+        self.event_dispatcher.sync_trigger(PEvent('tests', EventType.Base))
 
         await self.event_dispatcher.close()
 

@@ -14,7 +14,7 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """
-        Setup method to initialize the EventDispatcher before each test.
+        Setup method to initialize the EventDispatcher before each tests.
         """
         self.event_dispatcher = EventDispatcher(debug_mode=True)
         self.event_dispatcher.start()
@@ -36,11 +36,11 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         async def listener_two(event):
             listener_two_results.append("success")
 
-        self.event_dispatcher.add_listener("test", listener_one, allow_busy_trigger=False)
-        self.event_dispatcher.add_listener("test", listener_two)
+        self.event_dispatcher.add_listener("tests", listener_one, allow_busy_trigger=False)
+        self.event_dispatcher.add_listener("tests", listener_two)
 
-        await self.event_dispatcher.async_trigger(PEvent("test", EventType.Base))
-        await self.event_dispatcher.async_trigger(PEvent("test", EventType.Base))
+        await self.event_dispatcher.async_trigger(PEvent("tests", EventType.Base))
+        await self.event_dispatcher.async_trigger(PEvent("tests", EventType.Base))
 
         await self.event_dispatcher.close()
 
@@ -62,10 +62,10 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         async def listener_two(event):
             listener_two_results.append("success")
 
-        self.event_dispatcher.add_listener("test", listener_one, priority=Priority.NORMAL)
-        self.event_dispatcher.add_listener("test", listener_two, priority=Priority.HIGH)
+        self.event_dispatcher.add_listener("tests", listener_one, priority=Priority.NORMAL)
+        self.event_dispatcher.add_listener("tests", listener_two, priority=Priority.HIGH)
 
-        await self.event_dispatcher.async_trigger(PEvent("test", EventType.Base, max_responders=1))
+        await self.event_dispatcher.async_trigger(PEvent("tests", EventType.Base, max_responders=1))
 
         await self.event_dispatcher.close()
 
@@ -84,11 +84,11 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(1.5)
             collected_data.append('s')
 
-        self.event_dispatcher.add_listener("test 1", listener_one)
-        await self.event_dispatcher.async_trigger(PEvent("test 1", EventType.Base))
+        self.event_dispatcher.add_listener("tests 1", listener_one)
+        await self.event_dispatcher.async_trigger(PEvent("tests 1", EventType.Base))
 
-        self.event_dispatcher.add_listener("test 2", listener_one, allow_busy_trigger=False)
-        await self.event_dispatcher.async_trigger(PEvent("test 2", EventType.Base))
+        self.event_dispatcher.add_listener("tests 2", listener_one, allow_busy_trigger=False)
+        await self.event_dispatcher.async_trigger(PEvent("tests 2", EventType.Base))
 
         await self.event_dispatcher.close()
 
@@ -142,8 +142,8 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
             collected_data.append(VERIFICATION_VALUE)
             await asyncio.sleep(SLEEP_VALUE)
 
-        self.event_dispatcher.add_listener('test', listener_one)
-        await self.event_dispatcher.async_trigger(PEvent('test', EventType.Base, on_listener_finish=event_set_callback))
+        self.event_dispatcher.add_listener('tests', listener_one)
+        await self.event_dispatcher.async_trigger(PEvent('tests', EventType.Base, on_listener_finish=event_set_callback))
 
         try:
             await asyncio.wait_for(event_done.wait(), SLEEP_VALUE + ERROR_VALUE)
@@ -161,11 +161,11 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(1.3)
             collected_values.append('1')
 
-        self.event_dispatcher.add_listener('test', listener_one)
-        await self.event_dispatcher.async_trigger(PEvent('test', EventType.Base))
+        self.event_dispatcher.add_listener('tests', listener_one)
+        await self.event_dispatcher.async_trigger(PEvent('tests', EventType.Base))
 
         await asyncio.sleep(1)
-        self.event_dispatcher.cancel_event('test')
+        self.event_dispatcher.cancel_event('tests')
 
         await self.event_dispatcher.close()
 

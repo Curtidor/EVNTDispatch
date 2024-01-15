@@ -9,8 +9,6 @@ with codecs.open(os.path.join(here, "README.md"), encoding="utf-8") as fh:
 
 VERSION = '0.0.0'
 DESCRIPTION = 'A Python event system'
-LONG_DESCRIPTION = 'EVENTDispatch is a event system that supports scheduling tasks, async events and sync events'
-
 # Setting up
 setup(
     name="EVNTDispatch",
@@ -18,6 +16,8 @@ setup(
     author="Curtidor",
     author_email="<tannermatos18@gmai.com>",
     description=DESCRIPTION,
+    long_description=open('README.md').read(),
+    long_description_content_type='text/markdown',
     packages=find_packages(),
     install_requires=['pytest'],
     keywords=['python'],

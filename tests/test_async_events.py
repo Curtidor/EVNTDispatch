@@ -4,10 +4,10 @@ import unittest
 
 from math import isclose
 
-from event_system.event_dispatcher import EventDispatcher
-from event_system.pevent import PEvent
-from event_system.event_listener import Priority
-from event_system.event_type import EventType
+from EVNTDispatch.event_dispatcher import EventDispatcher
+from EVNTDispatch.pevent import PEvent
+from EVNTDispatch.event_listener import Priority
+from EVNTDispatch.event_type import EventType
 
 
 class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):

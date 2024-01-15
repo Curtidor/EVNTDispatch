@@ -1,5 +1,9 @@
 name: EVNTDispatch
 
+# on:
+#  release:
+#    types: [published]
+
 on:
   push:
     branches:

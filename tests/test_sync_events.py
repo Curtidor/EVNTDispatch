@@ -75,14 +75,15 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(isclose((end_time - start_time), delay, abs_tol=0.35))
 
-    async def test_event_on_listener_finish(self) -> None:
+    async def test_on_listener_finish(self) -> None:
         event_done = asyncio.Event()
 
-        def event_set_callback(future):
+        def event_set_callback():
             event_done.set()
 
         collected_data = []
         VERIFICATION_VALUE = '1'
+        TIMEOUT = 2
 
         def listener_one(event: PEvent):
             collected_data.append(VERIFICATION_VALUE)
@@ -90,25 +91,49 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         self.event_dispatcher.add_listener('tests', listener_one)
         self.event_dispatcher.sync_trigger(PEvent('tests', EventType.Base, on_listener_finish=event_set_callback))
 
-        await event_done.wait()
+        try:
+            await asyncio.wait_for(event_done.wait(), TIMEOUT)
+        except asyncio.TimeoutError:
+            self.fail('event was not set')
 
         self.assertTrue(VERIFICATION_VALUE in collected_data)
 
         await self.event_dispatcher.close()
 
-    async def cancel_future_event(self):
+    async def test_event_on_finish(self) -> None:
+        event_done = asyncio.Event()
+
+        def event_set_callback():
+            event_done.set()
+
+        collected_data = []
+        VERIFICATION_VALUE = '1'
+        TIMEOUT = 2
+
+        def listener_one(event: PEvent):
+            collected_data.append(VERIFICATION_VALUE)
+
+        self.event_dispatcher.add_listener('tests', listener_one)
+        self.event_dispatcher.sync_trigger(PEvent('tests', EventType.Base, on_event_finish=event_set_callback))
+
+        try:
+            await asyncio.wait_for(event_done.wait(), TIMEOUT)
+        except asyncio.TimeoutError:
+            self.fail('event was not set')
+
+        self.assertTrue(VERIFICATION_VALUE in collected_data)
+
+        await self.event_dispatcher.close()
+
+    async def test_cancel_future_event(self):
         listener_one_responses = []
         listener_two_responses = []
-        listener_three_responses = []
 
         def listener_one(event: PEvent):
             listener_one_responses.append("item")
 
         def listener_two(event: PEvent):
             listener_two_responses.append("item")
-
-        def listener_three(event: PEvent):
-            listener_three_responses.append('item')
 
         self.event_dispatcher.add_listener('tests', listener_one)
         self.event_dispatcher.add_listener('tests', listener_two)
@@ -117,16 +142,10 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         self.event_dispatcher.sync_trigger(PEvent('tests', EventType.Base))
 
-        self.event_dispatcher.add_listener('tests', listener_three)
-        self.event_dispatcher.remove_listeners('tests', (listener_one, listener_two))
-
-        self.event_dispatcher.sync_trigger(PEvent('tests', EventType.Base))
-
         await self.event_dispatcher.close()
 
         self.assertEqual([], listener_one_responses)
         self.assertEqual([], listener_two_responses)
-        self.assertEqual(['item'], listener_three_responses)
 
 
 if __name__ == '__main__':

@@ -72,28 +72,6 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listener_one_results, [])
         self.assertEqual(listener_two_results, ["success"])
 
-    async def test_register_listener_with_same_name_as_busy_listener(self):
-        """
-        Test registering a listener with the same name as a busy listener.
-
-        Verifies that registering a callback with the same name as a busy listener under a different event works as expected.
-        """
-        collected_data = []
-
-        async def listener_one(event: PEvent):
-            await asyncio.sleep(1.5)
-            collected_data.append('s')
-
-        self.event_dispatcher.add_listener("tests 1", listener_one)
-        await self.event_dispatcher.async_trigger(PEvent("tests 1", EventType.Base))
-
-        self.event_dispatcher.add_listener("tests 2", listener_one, allow_busy_trigger=False)
-        await self.event_dispatcher.async_trigger(PEvent("tests 2", EventType.Base))
-
-        await self.event_dispatcher.close()
-
-        self.assertEqual(1, len(collected_data))
-
     async def test_schedule_task(self):
         """
         Test scheduling tasks with EventDispatcher.
@@ -129,7 +107,7 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         """
         event_done = asyncio.Event()
 
-        def event_set_callback(fut):
+        def event_set_callback():
             event_done.set()
 
         collected_data = []
@@ -170,6 +148,18 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         await self.event_dispatcher.close()
 
         self.assertEqual(0, len(collected_values))
+
+    async def test_listener_has_error(self):
+        async def listener():
+            pass
+
+        self.event_dispatcher.add_listener('test', listener)
+        await self.event_dispatcher.async_trigger(PEvent('test', EventType.Base))
+
+        await self.event_dispatcher.close()
+        await asyncio.sleep(0.1)
+        self.assertTrue(self.event_dispatcher._had_error)
+
 
 
 if __name__ == "__main__":

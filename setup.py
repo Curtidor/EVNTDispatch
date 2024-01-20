@@ -3,7 +3,7 @@ import os
 
 here = os.path.abspath(os.path.dirname(__file__))
 
-VERSION = '0.0.1'
+VERSION = '0.0.2'
 DESCRIPTION = (
     "EVNTDispatch is a Python event system for seamless event-driven "
     "programming, offering flexibility and efficiency in handling and dispatching events."

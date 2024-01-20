@@ -391,10 +391,6 @@ class EventDispatcher:
         if self._cancel_events:
             return
 
-        # Determine the maximum number of responders to process.
-        # If event.max_responders is not set to an unlimited amount of responders,
-        # use the max_responders value specified in the event. Otherwise, set the
-        # value to the total number of listeners for this event.
         callable_listeners = [
             event_listener for event_listener in self._get_listeners(event)
             if (event_listener.allow_busy_trigger or event_listener.callback not in self._busy_listeners
@@ -429,9 +425,9 @@ class EventDispatcher:
         """
         task = self._event_loop.create_task(listener.callback(event, *args, **kwargs))
 
-        self._busy_listeners.add(listener.callback)
         await task
-        self._busy_listeners.remove(listener.callback)
+        if listener.callback in self._busy_listeners:
+            self._busy_listeners.remove(listener.callback)
 
         if task.exception():
             self._log_exception(task.exception())
@@ -539,17 +535,16 @@ class EventDispatcher:
         EventListener: The next event listener associated with the specified event.
         """
         listeners = self._listeners.get(event.event_name, [])
-        max_responders = event.max_responders if event.max_responders > 0 else len(listeners)
-        total_responses = 0
+        total_listeners = len(listeners)
+        max_responders = min(event.max_responders, total_listeners) if event.max_responders > 0 else total_listeners
 
+        total_responses = 0
         for listener in listeners:
             if total_responses >= max_responders:
                 break
 
-            if not does_event_type_match(listener, event):
-                continue
-
-            yield listener
+            if does_event_type_match(listener, event):
+                yield listener
 
             total_responses += 1
 
@@ -595,9 +590,9 @@ class EventDispatcher:
         """
 
         if listener.callback in self._busy_listeners and not event.include_busy_listeners and not listener.allow_busy_trigger:
-            logging.info(f"skipping call to: [{listener.callback.__name__}] as it's busy")
+            self._logger.info(f"skipping call to: [{listener.callback.__name__}] as it's busy")
         else:
-            logging.info(f"listener: [{listener.callback.__name__}] from event: [{event.event_name}]")
+            self._logger.info(f"[{listener.callback.__name__}] triggered from event [{event.event_name}]")
 
     def _log_exception(self, error: BaseException, *args) -> None:
         self._had_error = True

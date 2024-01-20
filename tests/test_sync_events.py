@@ -11,7 +11,7 @@ from EVNTDispatch.event_type import EventType
 
 class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.event_dispatcher = EventDispatcher()
+        self.event_dispatcher = EventDispatcher(debug_mode=True)
         self.event_dispatcher.start()
 
     async def test_base_sync_trigger(self):

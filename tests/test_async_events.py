@@ -14,7 +14,7 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """
-        Setup method to initialize the EventDispatcher before each tests.
+        Setup method to initialize the EventDispatcher before each test.
         """
         self.event_dispatcher = EventDispatcher(debug_mode=True)
         self.event_dispatcher.start()

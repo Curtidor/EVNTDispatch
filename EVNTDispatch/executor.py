@@ -1,10 +1,9 @@
-import asyncio
-import functools
+import logging
 
-from typing import Dict, Set
-from asyncio import AbstractEventLoop
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Any, List, Union
+
+from EVNTDispatch.c_logger import CLogger
 
 
 class Executor:
@@ -14,11 +13,7 @@ class Executor:
         :param max_workers: The maximum number of workers in the pool.
         """
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
-
-        self._running_futures: Dict[AbstractEventLoop, Set[Future]] = {}
-
-    def get_running_futures(self) -> Dict[AbstractEventLoop, Set[Future]]:
-        return self._running_futures
+        self._logger = CLogger('Executor', logging.INFO, {logging.StreamHandler(): logging.INFO})
 
     def submit(self, fn: Callable, *args: Any, is_scheduled_task: bool = False, **kwargs: Any,) -> Future:
         """
@@ -37,17 +32,9 @@ class Executor:
             if is_scheduled_task:
                 return future
 
-            loop = asyncio.get_event_loop()
-
-            wrapped_future = asyncio.wrap_future(future, loop=loop)
-            cleanup = functools.partial(self._future_finished, loop)
-
-            self._add_future_to_running_list(loop, wrapped_future)
-            wrapped_future.add_done_callback(cleanup)
-
             return future
         except Exception as e:
-            print(f"Exception occurred while submitting task: {e}")
+            self._logger.error(f"Exception occurred while submitting task: {e}")
             raise
 
     def map(self, fn: Callable, *iterables: Any, timeout: Union[int, None] = None) -> List[Any]:
@@ -62,7 +49,7 @@ class Executor:
         try:
             return list(self._executor.map(fn, *iterables, timeout=timeout))
         except Exception as e:
-            print(f"Exception occurred during mapping: {e}")
+            self._logger.error(f"Exception occurred during mapping: {e}")
             raise
 
     def shutdown(self, wait: bool = True):
@@ -74,20 +61,5 @@ class Executor:
         try:
             self._executor.shutdown(wait=wait)
         except Exception as e:
-            print(f"Exception occurred during shutdown: {e}")
+            self._logger.error(f"Exception occurred during shutdown: {e}")
             raise
-
-    def _add_future_to_running_list(self, loop: AbstractEventLoop, future: Future) -> None:
-        if self._running_futures.get(loop):
-            self._running_futures[loop].add(future)
-        else:
-            self._running_futures[loop] = set()
-            self._running_futures[loop].add(future)
-
-    def _future_finished(self, loop: AbstractEventLoop, future: Future) -> None:
-        if self._running_futures.get(loop):
-            try:
-                self._running_futures[loop].remove(future)
-            except KeyError:
-                # the future is not in the set, we can ignore this error
-                pass

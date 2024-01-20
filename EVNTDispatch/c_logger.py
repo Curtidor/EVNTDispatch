@@ -4,7 +4,7 @@ from typing import Dict
 
 
 class CLogger(logging.Logger):
-    def __init__(self, name: str, level: int = logging.INFO, handlers: Dict[logging.StreamHandler, int] = None,
+    def __init__(self, name: str, level: int = logging.INFO, handlers: Dict[logging.Handler, int] = None,
                  formatter: logging.Formatter = None):
         """
         Initialize a custom logger.

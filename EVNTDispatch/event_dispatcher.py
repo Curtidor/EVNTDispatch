@@ -10,7 +10,7 @@ from .event_listener import EventListener, Priority
 from .pevent import PEvent
 from .event_type import EventType
 from .executor import Executor
-from .utils import count_parameters, does_event_type_match
+from .utils import does_event_type_match
 from .c_logger import CLogger
 
 
@@ -114,7 +114,6 @@ class EventDispatcher:
 
             await asyncio.gather(*self._running_scheduled_tasks)
 
-        submitted_futures = self._executor.get_running_futures()
         # all futures and tasks that have been created are collected here
         waitables_collection: Dict[AbstractEventLoop, List[Union[Task, Future]]] = {}
 
@@ -130,18 +129,12 @@ class EventDispatcher:
                 else:
                     waitables_collection[loop] = [task]
 
-        # here we collect all the futures (sync Events)
-        for loop, futures in submitted_futures.items():
-            running_futures = [future for future in futures if not (future.cancelled() and future.done())]
-
-            if waitables_collection.get(loop):
-                waitables_collection[loop].extend(*running_futures)
-            else:
-                waitables_collection[loop] = running_futures
-
         # wait for the completion of the varius tasks and futures running based on their loop
         for loop, waitables in waitables_collection.items():
-            await asyncio.gather(*waitables)
+            results = await asyncio.gather(*waitables, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    self._log_exception(result)
 
         self._executor.shutdown()
 
@@ -318,19 +311,20 @@ class EventDispatcher:
         if self._cancel_events or self._is_sync_event_cancelled(event):
             return
 
-        running_futures = []
-        for listener in self._get_listeners(event):
-            task = self._run_sync_listener(listener, event, *args, **kwargs)
-            running_futures.append(task)
+        running_futures = [
+            self._run_sync_listener(listener, event, *args, **kwargs)
+            for listener in self._get_listeners(event)
+        ]
 
-        await asyncio.gather(*running_futures)
-
-        if not callable(event.on_event_finish):
-            return
+        results = await asyncio.gather(*running_futures, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                self._log_exception(result)
+                raise result
 
         self._run_coro_or_func(event.on_event_finish)
 
-    def _run_sync_listener(self, listener: EventListener, event: PEvent, *args, **kwargs) -> Future:
+    async def _run_sync_listener(self, listener: EventListener, event: PEvent, *args, **kwargs):
         """
         Execute a synchronous event listener.
 
@@ -350,17 +344,13 @@ class EventDispatcher:
         future = self._executor.submit(listener.callback, event, *args, **kwargs)
 
         wrapped_future = asyncio.wrap_future(future)
-        if not callable(event.on_listener_finish):
-            return wrapped_future
+        await wrapped_future
 
-        if count_parameters(event.on_listener_finish) != 1:
-            error = TypeError('on_listener_finish takes 1 arg of type asyncio.Future ')
-            self._log_exception(error)
-            raise error
+        if not wrapped_future.exception():
+            self._run_coro_or_func(event.on_listener_finish)
         else:
-            wrapped_future.add_done_callback(event.on_listener_finish)
-
-        return wrapped_future
+            self._log_exception(wrapped_future.exception())
+            raise wrapped_future.exception()
 
     async def async_trigger(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
         """
@@ -426,8 +416,7 @@ class EventDispatcher:
             if isinstance(result, BaseException):
                 self._log_exception(result, '_async_trigger')
 
-        if callable(event.on_event_finish):
-            self._run_coro_or_func(event.on_event_finish)
+        self._run_coro_or_func(event.on_event_finish)
 
     async def _run_async_listener(self, listener: EventListener, event: PEvent, *args, **kwargs):
         """
@@ -440,18 +429,15 @@ class EventDispatcher:
         """
         task = self._event_loop.create_task(listener.callback(event, *args, **kwargs))
 
-        if callable(event.on_listener_finish):
-            if count_parameters(event.on_listener_finish) != 1:
-                error = TypeError('on_listener_finish takes 1 arg of type asyncio.Future ')
-                self._log_exception(error)
-                raise error
-            else:
-                task.add_done_callback(event.on_listener_finish)
+        self._busy_listeners.add(listener.callback)
+        await task
+        self._busy_listeners.remove(listener.callback)
 
-        self._add_task_to_running_tasks(task, event)
-
-        cleanup = functools.partial(self._clean_up_tracked_task, event, listener, task)
-        task.add_done_callback(cleanup)
+        if task.exception():
+            self._log_exception(task.exception())
+            raise task.exception()
+        else:
+            self._run_coro_or_func(event.on_listener_finish)
 
     async def async_mixed_trigger(self, event: PEvent, *args, **kwargs):
         """
@@ -480,37 +466,32 @@ class EventDispatcher:
         self._is_queue_primed = True
         is_sync_event_cancelled = self._is_sync_event_cancelled(event)
 
-        running_waitables = []
+        running_tasks = []
         for listener in self._get_listeners(event):
             if asyncio.iscoroutinefunction(listener.callback):
                 task = self._event_loop.create_task(self._run_async_listener(listener, event, *args, **kwargs))
-                running_waitables.append(task)
+                running_tasks.append(task)
             elif not is_sync_event_cancelled:
-                future = self._run_sync_listener(listener, event, *args, **kwargs)
-                running_waitables.append(future)
+                task = self._event_loop.create_task(self._run_sync_listener(listener, event, *args, **kwargs))
+                running_tasks.append(task)
 
-        await asyncio.gather(*running_waitables)
+        await asyncio.gather(*running_tasks)
 
-        if callable(event.on_event_finish):
-            self._run_coro_or_func(event.on_event_finish)
+        self._run_coro_or_func(event.on_event_finish)
 
     # noinspection PyUnusedLocal
-    def _clean_up_tracked_task(self, event: PEvent, listener: EventListener, task: Task, future: Future) -> None:
+    def _remove_task_from_tracked_task(self, event: PEvent, task: Task, future: Future) -> None:
         """
         Clean up tracked tasks that have finished.
 
         Parameters:
         - event (PEvent): The event associated with the task.
-        - listener (EventListener): The listener associated with the task.
         - task (Task): The task to clean up.
         - future (Future): The future associated with the task.
 
         Returns:
         None
         """
-        if listener.callback in self._busy_listeners:
-            self._busy_listeners.remove(listener.callback)
-
         if self._running_tasks.get(event.event_name):
             self._running_tasks[event.event_name].remove(task)
 
@@ -640,7 +621,7 @@ class EventDispatcher:
 
         return self._event_loop
 
-    def _add_task_to_running_tasks(self, task: Union[Task, Future], event: PEvent) -> None:
+    def _add_task_to_tracked_task(self, task: Union[Task, Future], event: PEvent) -> None:
         """
         Add a task associated with a specific event to the running tasks.
 
@@ -679,6 +660,14 @@ class EventDispatcher:
         return True
 
     def _run_coro_or_func(self, func: Union[Callable[..., None], Callable[..., Coroutine]], *args, **kwargs) -> None:
+        if func is None:
+            return
+
+        if not callable(func):
+            error = TypeError(f'{func} is not callable')
+            self._log_exception(error)
+            raise error
+
         try:
             if asyncio.iscoroutinefunction(func):
                 coro = func(*args, *kwargs)
@@ -697,7 +686,11 @@ class EventDispatcher:
             queue_item: Tuple[Union[Callable, Coroutine], PEvent, Any, Any] = await self._event_queue.get()
             event_executor, event, args, kwargs = queue_item
 
-            self._event_loop.create_task(event_executor(event, *args, **kwargs))
+            task = self._event_loop.create_task(event_executor(event, *args, **kwargs))
+            self._add_task_to_tracked_task(task, event)
+
+            cleanup = functools.partial(self._remove_task_from_tracked_task, event, task)
+            task.add_done_callback(cleanup)
 
             # if the queue is empty set the empty event (true)
             if self._event_queue.empty():

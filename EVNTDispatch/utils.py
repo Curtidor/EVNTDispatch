@@ -13,9 +13,9 @@ def does_event_type_match(listener: EventListener, event: PEvent) -> bool:
     - event (PEvent): The event to compare the type with.
 
     Returns:
-    bool: True if the event types match or the listener's event type is EventType.Base, False otherwise.
+    bool: True if the event types match or the event type is EventType.Base, False otherwise.
     """
-    if listener.event_type == EventType.Base or listener.event_type == event.event_type:
+    if event.event_type == EventType.Base or listener.event_type == event.event_type:
         return True
 
     return False

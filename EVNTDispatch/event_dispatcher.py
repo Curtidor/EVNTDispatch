@@ -445,12 +445,18 @@ class EventDispatcher:
         try:
             task = self._event_loop.create_task(listener.callback(event, *args, **kwargs))
             await task
+
+            # Ensure any exception raised during asynchronous operation is properly handled
+            # by manually raising it if the task reports an exception.
+            if task.exception():
+                raise task.exception()
         except Exception as e:
             self._log_exception(e)
             raise
         finally:
             if listener.callback in self._busy_listeners:
                 self._busy_listeners.remove(listener.callback)
+
             self._run_coro_or_func(event.on_listener_finish)
 
     async def async_mixed_trigger(self, event: PEvent, *args, **kwargs):

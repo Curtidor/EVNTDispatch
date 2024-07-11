@@ -4,7 +4,7 @@ from .event_listener import EventListener, EventType
 from .pevent import PEvent
 
 
-def does_event_type_match(listener: EventListener, event: PEvent) -> bool:
+def does_event_type_match_listener_event(listener: EventListener, event: PEvent) -> bool:
     """
     Check if the event type of listener matches the event's type.
 

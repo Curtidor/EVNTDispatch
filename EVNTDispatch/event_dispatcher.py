@@ -10,7 +10,7 @@ from .event_listener import EventListener, Priority
 from .pevent import PEvent
 from .event_type import EventType
 from .executor import Executor
-from .utils import does_event_type_match
+from .utils import does_event_type_match_listener_event
 from .c_logger import CLogger
 
 
@@ -79,6 +79,14 @@ class EventDispatcher:
         :return: The number of events in the queue.
         """
         return self._event_queue.qsize()
+
+    @staticmethod
+    def event_queue_primer(func):
+        def wrapper(self, *args, **kwargs):
+            self._is_queue_primed = True
+            return func(self, *args, **kwargs)
+
+        return wrapper
 
     def start(self, loop: AbstractEventLoop = None) -> None:
         """
@@ -266,12 +274,23 @@ class EventDispatcher:
 
         :param event_name: The name or identifier of the synchronous event to cancel.
         """
-        if self._sync_canceled_future_events.get(event_name):
-            self._sync_canceled_future_events[event_name] += 1
-        else:
-            self._sync_canceled_future_events[event_name] = 1
+        self._sync_canceled_future_events[event_name] = self._sync_canceled_future_events.get(event_name, 0) + 1
 
-    def cancel_event(self, event_name: str) -> None:
+    def undo_sync_cancel(self, event_name: str, n: int = 1) -> None:
+        """
+        Undo the cancellation of a future synchronous event.
+
+        This method decrements the cancellation count for a specific synchronous event (`event_name`) by the specified
+        number (`n`). If the current cancellation count is greater than or equal to `n`, it decrements the count by `n`.
+        If the count is less than `n`, it sets the count to zero.
+
+        :param event_name: The name or identifier of the synchronous event to undo the cancellation for.
+        :param n: The number of cancellations to undo. Defaults to 1.
+        """
+        total_cancels = self._sync_canceled_future_events.get(event_name, 0)
+        self._sync_canceled_future_events[event_name] = max(total_cancels - n, 0)
+
+    def cancel_async_event(self, event_name: str) -> None:
         """
         Cancel all running tasks associated with a specific event.
 
@@ -284,8 +303,9 @@ class EventDispatcher:
             try:
                 task.cancel()
             except asyncio.CancelledError:
-                print(f"failed to cancel task: {task.get_coro().__name__}")
+                self._logger.warning(f"failed to cancel task: {task.get_coro().__name__}")
 
+    @event_queue_primer
     def sync_trigger(self, event: PEvent, *args, **kwargs) -> None:
         """
         Trigger the event and notify all registered listeners.
@@ -297,7 +317,6 @@ class EventDispatcher:
         if not self._is_event_loop_running:
             raise Exception("No event loop running")
 
-        self._is_queue_primed = True
         self._event_queue.put_nowait((self._sync_trigger, event, args, kwargs))
 
     async def _sync_trigger(self, event: PEvent, *args, **kwargs) -> None:
@@ -352,6 +371,7 @@ class EventDispatcher:
             self._log_exception(wrapped_future.exception())
             raise wrapped_future.exception()
 
+    @event_queue_primer
     async def async_trigger(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
         """
         Asynchronously trigger the event and notify registered listeners.
@@ -363,9 +383,9 @@ class EventDispatcher:
         if not self._is_event_loop_running:
             raise Exception("No event loop running")
 
-        self._is_queue_primed = True
         self._event_queue.put_nowait((self._async_trigger, event, args, kwargs))
 
+    @event_queue_primer
     def async_trigger_nw(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
         """
         Asynchronously trigger the event and notify registered listeners without waiting.
@@ -377,7 +397,6 @@ class EventDispatcher:
         if not self._is_event_loop_running:
             raise Exception("No event loop running")
 
-        self._is_queue_primed = True
         self._event_queue.put_nowait((self._async_trigger, event, args, kwargs))
 
     async def _async_trigger(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
@@ -414,7 +433,7 @@ class EventDispatcher:
 
         self._run_coro_or_func(event.on_event_finish)
 
-    async def _run_async_listener(self, listener: EventListener, event: PEvent, *args, **kwargs):
+    async def _run_async_listener(self, listener: EventListener, event: PEvent, *args: Any, **kwargs: Any) -> None:
         """
         Asynchronously run the specified listener for the given event.
 
@@ -423,16 +442,15 @@ class EventDispatcher:
         :param args: Additional arguments to pass to the listener.
         :param kwargs: Additional keyword arguments to pass to the listener.
         """
-        task = self._event_loop.create_task(listener.callback(event, *args, **kwargs))
-
-        await task
-        if listener.callback in self._busy_listeners:
-            self._busy_listeners.remove(listener.callback)
-
-        if task.exception():
-            self._log_exception(task.exception())
-            raise task.exception()
-        else:
+        try:
+            task = self._event_loop.create_task(listener.callback(event, *args, **kwargs))
+            await task
+        except Exception as e:
+            self._log_exception(e)
+            raise
+        finally:
+            if listener.callback in self._busy_listeners:
+                self._busy_listeners.remove(listener.callback)
             self._run_coro_or_func(event.on_listener_finish)
 
     async def async_mixed_trigger(self, event: PEvent, *args, **kwargs):
@@ -455,11 +473,11 @@ class EventDispatcher:
        """
         self._event_queue.put_nowait((self._mixed_trigger, event, args, kwargs))
 
+    @event_queue_primer
     async def _mixed_trigger(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
         if self._cancel_events:
             return
 
-        self._is_queue_primed = True
         is_sync_event_cancelled = self._is_sync_event_cancelled(event)
 
         running_tasks = []
@@ -543,9 +561,10 @@ class EventDispatcher:
             if total_responses >= max_responders:
                 break
 
-            if does_event_type_match(listener, event):
-                yield listener
+            if not does_event_type_match_listener_event(listener, event):
+                continue
 
+            yield listener
             total_responses += 1
 
     def _register_event_listener(self, event_name: str, callback: Callable, priority: Priority,

@@ -143,7 +143,7 @@ class TestAsyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         await self.event_dispatcher.async_trigger(PEvent('tests', EventType.Base))
 
         await asyncio.sleep(1)
-        self.event_dispatcher.cancel_event('tests')
+        self.event_dispatcher.cancel_async_event('tests')
 
         await self.event_dispatcher.close()
 

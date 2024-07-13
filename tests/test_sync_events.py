@@ -126,17 +126,20 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
         await self.event_dispatcher.close()
 
     async def test_cancel_future_event(self):
-        listener_one_responses = []
-        listener_two_responses = []
+        listener_responses = []
 
         def listener_one(event: PEvent):
-            listener_one_responses.append("item")
+            listener_responses.append("item")
 
         def listener_two(event: PEvent):
-            listener_two_responses.append("item")
+            listener_responses.append("item")
+
+        def listener_three(event: PEvent):
+            listener_responses.append("item")
 
         self.event_dispatcher.add_listener('tests', listener_one)
         self.event_dispatcher.add_listener('tests', listener_two)
+        self.event_dispatcher.add_listener('tests', listener_three)
 
         self.event_dispatcher.cancel_future_sync_event('tests')
 
@@ -144,8 +147,22 @@ class TestSyncEventDispatcher(unittest.IsolatedAsyncioTestCase):
 
         await self.event_dispatcher.close()
 
-        self.assertEqual([], listener_one_responses)
-        self.assertEqual([], listener_two_responses)
+        self.assertEqual(0, len(listener_responses))
+
+    async def test_duplicate_register(self):
+        responses = []
+
+        def listener_one(event: PEvent):
+            responses.append('item')
+
+        self.event_dispatcher.add_listener('tests', listener_one)
+        self.event_dispatcher.add_listener('tests', listener_one)
+
+        self.event_dispatcher.sync_trigger(PEvent('tests', EventType.Base))
+
+        await self.event_dispatcher.close()
+
+        self.assertEqual(1, len(responses))
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@ import functools
 import logging
 import os
 
+from threading import Lock
 from asyncio import AbstractEventLoop, Task, Future
 from typing import Callable, Any, Set, List, Dict, Union, Coroutine, Tuple, Generator, Iterable, Awaitable
 
@@ -32,7 +33,7 @@ class EventDispatcher:
                                      Defaults to -1 which uses the available logical CPU count.
         """
         self.debug_mode = debug_mode
-
+        # a list is used as event listeners are ordered based on priority
         self._listeners: Dict[str, List['EventListener']] = {}
         self._sync_canceled_future_events: Dict[str, int] = {}
         self._busy_listeners: Set[Coroutine] = set()
@@ -46,13 +47,15 @@ class EventDispatcher:
         # Dictionary to hold running tasks
         self._running_tasks: Dict[str, List[Union[Task, Future]]] = {}
         self._running_scheduled_tasks: List[Union[Task, Future]] = []
-        self._time_until_final_task = 0  # Time until the final task is complete
+        self._time_until_final_task: float = 0  # Time until the final task is complete
 
         # Flags for controlling event dispatch and queue status
         self._cancel_events = False
         self._is_queue_primed = False
         self._is_event_loop_running = False
         self._had_error = False
+
+        self._lock = Lock()
 
         # Determine the total number of workers based on available logical cores
         cpu_count = os.cpu_count()
@@ -81,11 +84,20 @@ class EventDispatcher:
         return self._event_queue.qsize()
 
     @staticmethod
-    def event_queue_primer(func):
+    def _event_queue_primer(func):
+        @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
             self._is_queue_primed = True
             return func(self, *args, **kwargs)
+        return wrapper
 
+    @staticmethod
+    def _requires_running_event_loop(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if not self._is_event_loop_running:
+                raise RuntimeError("No event loop running")
+            return func(self, *args, **kwargs)
         return wrapper
 
     def start(self, loop: AbstractEventLoop = None) -> None:
@@ -187,6 +199,7 @@ class EventDispatcher:
             if listener.callback in callbacks_to_remove:
                 event_listeners.remove(listener)
 
+    @_requires_running_event_loop
     def schedule_task(self, func: Union[Callable[..., None], Callable[..., Awaitable[None]]], exec_time: float,
                       *args: List) -> None:
         """
@@ -204,9 +217,6 @@ class EventDispatcher:
         Returns:
             None
         """
-        if not self._is_event_loop_running:
-            raise Exception("No event loop running")
-
         if not callable(func):
             raise ValueError(f"({func}), must be a callable")
 
@@ -215,7 +225,7 @@ class EventDispatcher:
         else:
             time_handler = self._event_loop.call_later(exec_time, self._schedule_func, func, *args)
 
-        self._time_until_final_task = time_handler.when()
+        self._time_until_final_task = max(self._time_until_final_task, time_handler.when())
 
     def _schedule_coroutine(self, coro: Callable[..., Awaitable[None]], *args: List) -> None:
         """
@@ -305,7 +315,8 @@ class EventDispatcher:
             except asyncio.CancelledError:
                 self._logger.warning(f"failed to cancel task: {task.get_coro().__name__}")
 
-    @event_queue_primer
+    @_requires_running_event_loop
+    @_event_queue_primer
     def sync_trigger(self, event: PEvent, *args, **kwargs) -> None:
         """
         Trigger the event and notify all registered listeners.
@@ -314,9 +325,6 @@ class EventDispatcher:
         :param args: Additional arguments to pass to listeners.
         :param kwargs: Additional keyword arguments to pass to listeners.
         """
-        if not self._is_event_loop_running:
-            raise Exception("No event loop running")
-
         self._event_queue.put_nowait((self._sync_trigger, event, args, kwargs))
 
     async def _sync_trigger(self, event: PEvent, *args, **kwargs) -> None:
@@ -371,7 +379,8 @@ class EventDispatcher:
             self._log_exception(wrapped_future.exception())
             raise wrapped_future.exception()
 
-    @event_queue_primer
+    @_requires_running_event_loop
+    @_event_queue_primer
     async def async_trigger(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
         """
         Asynchronously trigger the event and notify registered listeners.
@@ -380,12 +389,10 @@ class EventDispatcher:
         :param args: Additional arguments to pass to listeners.
         :param kwargs: Additional keyword arguments to pass to listeners.
         """
-        if not self._is_event_loop_running:
-            raise Exception("No event loop running")
-
         self._event_queue.put_nowait((self._async_trigger, event, args, kwargs))
 
-    @event_queue_primer
+    @_requires_running_event_loop
+    @_event_queue_primer
     def async_trigger_nw(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
         """
         Asynchronously trigger the event and notify registered listeners without waiting.
@@ -394,8 +401,6 @@ class EventDispatcher:
         :param args: Additional arguments to pass to listeners.
         :param kwargs: Additional keyword arguments to pass to listeners.
         """
-        if not self._is_event_loop_running:
-            raise Exception("No event loop running")
 
         self._event_queue.put_nowait((self._async_trigger, event, args, kwargs))
 
@@ -479,7 +484,7 @@ class EventDispatcher:
        """
         self._event_queue.put_nowait((self._mixed_trigger, event, args, kwargs))
 
-    @event_queue_primer
+    @_event_queue_primer
     async def _mixed_trigger(self, event: PEvent, *args: Any, **kwargs: Any) -> None:
         if self._cancel_events:
             return
@@ -587,13 +592,11 @@ class EventDispatcher:
                                  event_type=event_type)
 
         # if the callback is already registered in the event, return
-        if listener.callback in [lstener for lstener in self._listeners.get(event_name, [])]:
+        # this check is done avoid duplicate listeners in the list
+        if listener in [lstener for lstener in self._listeners.get(event_name, [])]:
             return
 
-        if event_name in self._listeners:
-            self._listeners[event_name].append(listener)
-        else:
-            self._listeners.update({event_name: [listener]})
+        self._listeners.setdefault(event_name, []).append(listener)
 
     def _sort_listeners(self, event_name: str) -> None:
         """
